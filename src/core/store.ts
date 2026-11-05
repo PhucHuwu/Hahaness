@@ -1,51 +1,34 @@
-import { mkdir, readFile, readdir, appendFile } from "node:fs/promises"
-import { existsSync } from "node:fs"
-import { join } from "node:path"
+import type { Db } from "./db.ts"
 import type { Compaction, Message, Part, Session, StoreEvent } from "./types.ts"
 
 /**
- * Append-only JSONL store, một file mỗi session. Đọc lại bằng cách fold toàn bộ
- * event; đủ cho v0.1, chưa cần index.
+ * Event log append-only trong SQLite (bảng `events`), một dòng mỗi event.
+ * Đọc lại bằng cách fold toàn bộ event của session, giống JSONL trước đây.
+ * Metadata session nằm riêng ở bảng `sessions` để liệt kê nhanh.
  */
 export class SessionStore {
-  constructor(private root: string) {}
-
-  private file(sessionID: string) {
-    return join(this.root, "sessions", `${sessionID}.jsonl`)
-  }
+  constructor(private db: Db) {}
 
   async append(sessionID: string, event: StoreEvent) {
-    await mkdir(join(this.root, "sessions"), { recursive: true })
-    await appendFile(this.file(sessionID), JSON.stringify(event) + "\n")
+    this.db.sql.prepare("INSERT INTO events(session_id, kind, data) VALUES(?, ?, ?)").run(sessionID, event.kind, JSON.stringify(event))
   }
 
   async read(sessionID: string): Promise<StoreEvent[]> {
-    const path = this.file(sessionID)
-    if (!existsSync(path)) return []
-    const text = await readFile(path, "utf8")
-    return text
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as StoreEvent)
+    const rows = this.db.sql.prepare("SELECT data FROM events WHERE session_id = ? ORDER BY seq").all(sessionID) as Array<{ data: string }>
+    return rows.map((r) => JSON.parse(r.data) as StoreEvent)
   }
 
-  /** Metadata mọi phiên đã lưu (dòng đầu mỗi file), mới nhất trước. */
+  /** Mọi phiên đã lưu, mới nhất trước. */
   async listSessions(): Promise<Session[]> {
-    const dir = join(this.root, "sessions")
-    if (!existsSync(dir)) return []
-    const out: Session[] = []
-    for (const f of await readdir(dir)) {
-      if (!f.endsWith(".jsonl")) continue
-      const text = await readFile(join(dir, f), "utf8")
-      const first = text.slice(0, text.indexOf("\n") < 0 ? undefined : text.indexOf("\n"))
-      try {
-        const e = JSON.parse(first) as StoreEvent
-        if (e.kind === "session") out.push(e.session)
-      } catch {
-        /* corrupt first line; skip */
-      }
-    }
-    return out.sort((a, b) => b.createdAt - a.createdAt)
+    const rows = this.db.sql.prepare("SELECT * FROM sessions ORDER BY created_at DESC").all() as Array<Record<string, any>>
+    return rows.map((r) => ({
+      id: r.id,
+      ...(r.parent_id ? { parentID: r.parent_id } : {}),
+      agent: r.agent,
+      model: r.model,
+      title: r.title,
+      createdAt: Number(r.created_at),
+    }))
   }
 
   async load(sessionID: string): Promise<SessionState | undefined> {
@@ -55,7 +38,12 @@ export class SessionStore {
   }
 
   async createSession(session: Session) {
-    await this.append(session.id, { kind: "session", session })
+    this.db.tx(() => {
+      this.db.sql
+        .prepare("INSERT INTO sessions(id, parent_id, agent, model, title, created_at) VALUES(?, ?, ?, ?, ?, ?)")
+        .run(session.id, session.parentID ?? null, session.agent, session.model, session.title, session.createdAt)
+      this.db.sql.prepare("INSERT INTO events(session_id, kind, data) VALUES(?, ?, ?)").run(session.id, "session", JSON.stringify({ kind: "session", session }))
+    })
   }
 
   async addMessage(sessionID: string, message: Message) {

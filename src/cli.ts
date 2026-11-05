@@ -26,7 +26,7 @@ const { harness, agents } = app
 
 if (app.providerError) {
   console.error(app.providerError)
-  console.error("See docs/architecture/06-providers.md for hahaness.json format, or run `npm run ui` to configure in the browser.")
+  console.error("Run `npm run ui` to configure a provider in Settings, or set OPENAI_API_KEY.")
   process.exit(1)
 }
 
@@ -48,8 +48,9 @@ function brief(args: unknown) {
 
 console.log(`Hahaness — your company. CTO: ${main.session.model}`)
 console.log(`Staff: ${agents.subagents().map((a) => a.id).join(", ")}`)
-console.log(`Providers: ${harness.cfg.providers.ids().join(", ")}${app.configPath ? ` (${app.configPath})` : " (env)"}`)
-console.log(`Workspace: ${app.cwd} — edit COMPANY.md and USER.md to teach the team about your business.`)
+console.log(`Providers: ${harness.cfg.providers.ids().join(", ")}`)
+console.log(`Company data: ${app.db.path}${app.imported.length ? ` (imported ${app.imported.length} items from the old folder layout)` : ""}`)
+console.log(`Tell the CTO about your business; it keeps knowledge, skills and staff up to date.`)
 console.log(`Tip: talk to the CTO normally. @writer <task> talks to an employee directly. /staff, /quit\n`)
 
 while (true) {
@@ -84,5 +85,5 @@ while (true) {
   console.log()
 }
 rl.close()
-app.mcp.closeAll()
+app.close()
 process.exit(0)

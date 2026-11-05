@@ -1,6 +1,7 @@
-import { join } from "node:path"
 import type { AgentDef } from "./agent/types.ts"
-import type { AgentRegistry } from "./agent/registry.ts"
+import { MANAGEMENT_ACTIONS, type AgentRegistry } from "./agent/registry.ts"
+import type { Db } from "./core/db.ts"
+import type { DocumentStore } from "./context/documents.ts"
 import { Inbox } from "./core/inbox.ts"
 import { id } from "./core/id.ts"
 import { runTurn, type LoopEvents, type TurnContext } from "./core/loop.ts"
@@ -20,7 +21,8 @@ import type { SkillStore } from "./context/skills.ts"
 
 export interface HarnessConfig {
   cwd: string
-  dataDir: string
+  db: Db
+  docs: DocumentStore
   providers: ProviderRegistry
   /** Dạng `providerID/modelID`; agent không khai báo model thì dùng cái này. */
   defaultModel: string
@@ -59,7 +61,7 @@ export class Harness {
   private activeSubagents = 0
 
   constructor(readonly cfg: HarnessConfig) {
-    this.store = new SessionStore(cfg.dataDir)
+    this.store = new SessionStore(cfg.db)
     this.askGate = new AskGate(cfg.askHandler)
   }
 
@@ -95,7 +97,7 @@ export class Harness {
 
   private async activate(session: Session, agent: AgentDef, opts: { ruleset?: Ruleset; depth?: number; extraTools?: Tool[] }): Promise<Live> {
     const instructions = [
-      ...(await workspace.sources(this.cfg.cwd, { includePersonal: agent.mode === "primary" })),
+      ...workspace.sources(this.cfg.docs, { includePersonal: agent.mode === "primary" }),
       environment(this.cfg.cwd),
     ]
     const live: Live = {
@@ -166,7 +168,7 @@ export class Harness {
       messages: live.messages,
       compactionSummary: live.compaction,
       estimate: live.estimate,
-      outputDir: join(this.cfg.dataDir, "tool-output"),
+      saveOutput: (callID, output) => this.cfg.docs.put(`tool-output/${callID}.txt`, output, live.agent.id),
       events: this.cfg.events,
       signal: live.abort.signal,
     }
@@ -213,9 +215,7 @@ export class Harness {
     if (this.activeSubagents >= (this.cfg.maxConcurrentSubagents ?? 4)) throw new Error("delegate: too many concurrent subagents")
 
     const childRules = inherit(parent.ruleset, [
-      { action: "question", resource: "*", effect: "deny" },
-      { action: "memory", resource: "*", effect: "deny" },
-      { action: "hire", resource: "*", effect: "deny" },
+      ...MANAGEMENT_ACTIONS.filter((a) => a !== "delegate").map((action) => ({ action, resource: "*", effect: "deny" as const })),
       ...(agentDef.role === "leaf" ? [{ action: "delegate", resource: "*", effect: "deny" } as const] : []),
     ])
     const child = await this.createSession({
@@ -262,7 +262,7 @@ export class Harness {
     const last = [...child.messages].reverse().find((m) => m.role === "assistant" && m.parts.some((p) => p.type === "text"))
     const summary = last?.parts.filter((p) => p.type === "text").map((p) => p.text).join("") ?? ""
     const files = new Set<string>()
-    for (const m of child.messages) for (const p of m.parts) if (p.type === "tool-call" && (p.name === "write" || p.name === "edit")) files.add((p.args as any)?.path)
+    for (const m of child.messages) for (const p of m.parts) if (p.type === "tool-call" && p.name === "write") files.add((p.args as any)?.path)
     const steps = child.messages.filter((m) => m.role === "assistant").length
     return {
       sessionID: child.session.id,

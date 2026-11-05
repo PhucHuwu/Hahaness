@@ -1,59 +1,61 @@
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
-import { existsSync } from "node:fs"
-import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import type { App } from "../bootstrap.ts"
-import { buildProviders, ConfigSchema, CONFIG_FILES, loadConfig } from "../config.ts"
+import { buildProviders, ConfigSchema, saveConfig, storedConfig } from "../config.ts"
 import * as workspace from "../context/workspace.ts"
+import { normalizePath, type DocMeta } from "../context/documents.ts"
 import { SkillStore } from "../context/skills.ts"
 import { toMarkdown } from "../agent/registry.ts"
 import type { McpServerConfig } from "../mcp/client.ts"
 import { HttpError, type Router } from "./http.ts"
 
-const KNOWLEDGE_FILES = new Set<string>([workspace.FILES.company, workspace.FILES.user, workspace.FILES.memory])
+const CORE = [workspace.FILES.company, workspace.FILES.user, workspace.FILES.memory] as string[]
+const OUTPUT_DIRS = [workspace.DELIVERABLES_DIR, workspace.DRAFTS_DIR]
 
-/** Path hợp lệ cho Knowledge: 3 file gốc hoặc bất kỳ file trong knowledge/. */
-function knowledgePath(cwd: string, p: string) {
-  if (KNOWLEDGE_FILES.has(p)) return join(cwd, p)
-  const full = resolve(cwd, p)
-  const rel = relative(join(cwd, workspace.KNOWLEDGE_DIR), full)
-  if (rel.startsWith("..") || isAbsolute(rel)) throw new HttpError(400, `path must be inside ${workspace.KNOWLEDGE_DIR}/`)
-  return full
+function param(req: { url: URL }, key: string) {
+  const v = req.url.searchParams.get(key)
+  if (!v) throw new HttpError(400, `${key} is required`)
+  try {
+    return normalizePath(v)
+  } catch (e) {
+    throw new HttpError(400, (e as Error).message)
+  }
+}
+
+/** UI chỉ sửa được 3 tài liệu cốt lõi và knowledge/*. */
+function editable(path: string) {
+  if (CORE.includes(path) || path.startsWith(`${workspace.KNOWLEDGE_DIR}/`)) return path
+  throw new HttpError(400, `path must be one of ${CORE.join(", ")} or inside ${workspace.KNOWLEDGE_DIR}/`)
+}
+
+function isOutput(path: string) {
+  return OUTPUT_DIRS.some((d) => path.startsWith(`${d}/`))
 }
 
 export function adminRoutes(r: Router, app: App) {
-  const { cwd, skills, mcp } = app
+  const { docs, skills, mcp, db } = app
 
   // ---- Settings: providers / model ------------------------------------------
-  r.get("/api/config", async () => {
-    const { config, path } = await loadConfig(cwd)
-    return {
-      path: path ?? null,
-      writePath: path ?? join(cwd, CONFIG_FILES[0]!),
-      config: redact(config),
-      providerError: app.providerError ?? null,
-      providers: app.harness.cfg.providers.ids(),
-      defaultModel: app.harness.cfg.defaultModel,
-      env: { OPENAI_API_KEY: !!process.env.OPENAI_API_KEY, HAHANESS_MODEL: process.env.HAHANESS_MODEL ?? null },
-    }
-  })
+  r.get("/api/config", () => ({
+    config: redact(storedConfig(db)),
+    db: db.path,
+    providerError: app.providerError ?? null,
+    providers: app.harness.cfg.providers.ids(),
+    defaultModel: app.harness.cfg.defaultModel,
+    env: { OPENAI_API_KEY: !!process.env.OPENAI_API_KEY, HAHANESS_MODEL: process.env.HAHANESS_MODEL ?? null },
+  }))
 
   r.put("/api/config", async (req) => {
-    const body = await req.json<unknown>()
-    const parsed = ConfigSchema.safeParse(body)
+    const parsed = ConfigSchema.safeParse(await req.json<unknown>())
     if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "))
-    const { path } = await loadConfig(cwd)
-    const target = path && path.startsWith(cwd) ? path : join(cwd, CONFIG_FILES[0]!)
-    const current = existsSync(target) ? ConfigSchema.parse(JSON.parse(await readFile(target, "utf8"))) : { providers: {} }
-    const next = restoreSecrets(parsed.data, current)
-    await writeFile(target, JSON.stringify(next, null, 2), "utf8")
+    const next = restoreSecrets(parsed.data, storedConfig(db))
+    saveConfig(db, next)
     try {
-      const providers = await buildProviders(next, cwd)
+      const providers = await buildProviders(next, app.cwd)
       app.harness.reconfigure({ providers, defaultModel: process.env.HAHANESS_MODEL ?? next.defaultModel })
       app.providerError = undefined
     } catch (e) {
       app.providerError = (e as Error).message
     }
-    return { ok: true, path: target, providerError: app.providerError ?? null }
+    return { ok: true, providerError: app.providerError ?? null }
   })
 
   r.post("/api/config/test", async (req) => {
@@ -74,49 +76,73 @@ export function adminRoutes(r: Router, app: App) {
   })
 
   // ---- Knowledge ----------------------------------------------------------
-  r.get("/api/knowledge", async () => {
-    const core = await Promise.all(
-      [...KNOWLEDGE_FILES].map(async (f) => {
-        const p = join(cwd, f)
-        const text = existsSync(p) ? await readFile(p, "utf8") : ""
-        return { path: f, size: text.length }
-      }),
-    )
-    return { core, files: await workspace.knowledge(cwd), staffDir: "staff", outputs: await outputs(cwd) }
-  })
+  r.get("/api/knowledge", () => ({
+    core: CORE.map((p) => {
+      const d = docs.get(p)
+      return { path: p, size: d?.size ?? 0, updatedAt: d?.updatedAt ?? 0, author: d?.author ?? null }
+    }),
+    files: workspace.knowledge(docs).map(view),
+  }))
 
-  r.get("/api/knowledge/file", async (req) => {
-    const p = req.url.searchParams.get("path")
-    if (!p) throw new HttpError(400, "path is required")
-    const full = knowledgePath(cwd, p)
-    if (!existsSync(full)) return { path: p, content: "" }
-    return { path: p, content: await readFile(full, "utf8") }
+  r.get("/api/knowledge/file", (req) => {
+    const p = editable(param(req, "path"))
+    return { path: p, content: docs.read(p) ?? "" }
   })
 
   r.put("/api/knowledge/file", async (req) => {
     const body = await req.json<{ path?: string; content?: string }>()
     if (!body.path || body.content === undefined) throw new HttpError(400, "path and content are required")
-    const full = knowledgePath(cwd, body.path)
-    await mkdir(dirname(full), { recursive: true })
-    await writeFile(full, body.content, "utf8")
+    let p: string
+    try {
+      p = normalizePath(body.path)
+    } catch (e) {
+      throw new HttpError(400, (e as Error).message)
+    }
+    docs.put(editable(p), body.content, "ceo")
+    return { ok: true, path: p }
+  })
+
+  r.delete("/api/knowledge/file", (req) => {
+    const p = param(req, "path")
+    if (CORE.includes(p)) throw new HttpError(400, "core documents cannot be deleted")
+    if (!docs.delete(editable(p))) throw new HttpError(404, `no document ${p}`)
     return { ok: true }
   })
 
-  r.delete("/api/knowledge/file", async (req) => {
-    const p = req.url.searchParams.get("path")
-    if (!p || KNOWLEDGE_FILES.has(p)) throw new HttpError(400, "only files under knowledge/ can be deleted")
-    await rm(knowledgePath(cwd, p), { force: true })
-    return { ok: true }
+  // ---- Results: deliverables + drafts (xem + tải) ---------------------------
+  r.get("/api/results", () => ({
+    deliverables: docs.list(workspace.DELIVERABLES_DIR).map(view).sort(newest),
+    drafts: docs.list(workspace.DRAFTS_DIR).map(view).sort(newest),
+  }))
+
+  r.get("/api/results/file", (req) => {
+    const p = param(req, "path")
+    if (!isOutput(p)) throw new HttpError(400, `path must be under ${OUTPUT_DIRS.join("/ or ")}/`)
+    const d = docs.get(p)
+    if (!d) throw new HttpError(404, `no document ${p}`)
+    return d
   })
 
-  r.get("/api/outputs/file", async (req) => {
-    const p = req.url.searchParams.get("path")
-    if (!p) throw new HttpError(400, "path is required")
-    const full = resolve(cwd, p)
-    const rel = relative(cwd, full)
-    if (!/^(drafts|deliverables)[\\/]/.test(rel)) throw new HttpError(400, "path must be under drafts/ or deliverables/")
-    if (!existsSync(full)) throw new HttpError(404, `no file ${p}`)
-    return { path: p, content: await readFile(full, "utf8") }
+  r.get("/api/results/download", (req, res) => {
+    const p = param(req, "path")
+    if (!isOutput(p)) throw new HttpError(400, `path must be under ${OUTPUT_DIRS.join("/ or ")}/`)
+    const d = docs.get(p)
+    if (!d) throw new HttpError(404, `no document ${p}`)
+    const name = p.split("/").pop()!
+    const filename = /\.\w+$/.test(name) ? name : `${name}.md`
+    res.writeHead(200, {
+      "content-type": `${filename.endsWith(".md") ? "text/markdown" : "text/plain"}; charset=utf-8`,
+      "content-disposition": `attachment; filename="${filename.replace(/[^\w.-]+/g, "_")}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    })
+    res.end(d.content)
+    return undefined
+  })
+
+  r.delete("/api/results/file", (req) => {
+    const p = param(req, "path")
+    if (!isOutput(p)) throw new HttpError(400, `path must be under ${OUTPUT_DIRS.join("/ or ")}/`)
+    if (!docs.delete(p)) throw new HttpError(404, `no document ${p}`)
+    return { ok: true }
   })
 
   r.get("/api/staff/:id/markdown", (req) => {
@@ -162,6 +188,14 @@ export function adminRoutes(r: Router, app: App) {
   })
 }
 
+function view(d: DocMeta) {
+  return { path: d.path, size: d.size, title: d.title, updatedAt: d.updatedAt, author: d.author ?? null }
+}
+
+function newest(a: { updatedAt: number }, b: { updatedAt: number }) {
+  return b.updatedAt - a.updatedAt
+}
+
 const SECRET = "••••"
 
 /** Không trả apiKey thật ra UI; `{env:X}` vẫn hiện để CEO biết nguồn. */
@@ -185,17 +219,4 @@ function restoreSecrets<T extends { providers: Record<string, any> }>(next: T, c
     }),
   )
   return { ...next, providers }
-}
-
-async function outputs(cwd: string) {
-  const out: Array<{ path: string; size: number; mtime: number }> = []
-  for (const dir of ["deliverables", "drafts"]) {
-    const full = join(cwd, dir)
-    if (!existsSync(full)) continue
-    for (const f of await readdir(full)) {
-      const s = await stat(join(full, f))
-      if (s.isFile()) out.push({ path: `${dir}/${f}`, size: s.size, mtime: s.mtimeMs })
-    }
-  }
-  return out.sort((a, b) => b.mtime - a.mtime)
 }

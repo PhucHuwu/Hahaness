@@ -91,8 +91,8 @@ export interface Config {
 }
 
 export interface ConfigView {
-  path: string | null
-  writePath: string
+  /** File SQLite chứa toàn bộ dữ liệu công ty. */
+  db: string
   config: Config
   providerError: string | null
   providers: string[]
@@ -100,10 +100,27 @@ export interface ConfigView {
   env: { OPENAI_API_KEY: boolean; HAHANESS_MODEL: string | null }
 }
 
+export interface DocView {
+  path: string
+  size: number
+  title: string
+  updatedAt: number
+  author: string | null
+}
+
 export interface KnowledgeView {
-  core: Array<{ path: string; size: number }>
-  files: Array<{ path: string; size: number; title: string }>
-  outputs: Array<{ path: string; size: number; mtime: number }>
+  core: Array<{ path: string; size: number; updatedAt: number; author: string | null }>
+  files: DocView[]
+}
+
+export interface ResultsView {
+  deliverables: DocView[]
+  drafts: DocView[]
+}
+
+export interface Doc extends DocView {
+  content: string
+  createdAt: number
 }
 
 export interface SkillMeta {

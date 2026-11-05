@@ -7,6 +7,7 @@ import { z } from "zod"
 import { OpenAIProvider } from "./provider/openai.ts"
 import { ProviderRegistry } from "./provider/registry.ts"
 import type { ProviderClient } from "./provider/types.ts"
+import type { Db } from "./core/db.ts"
 
 const ModelInfoSchema = z.object({
   contextWindow: z.number().int().positive().optional(),
@@ -44,24 +45,40 @@ export function expandEnv(value: string | undefined): string | undefined {
   return value.replace(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name) => process.env[name] ?? "")
 }
 
-/** Project config thắng user config (`~/.hahaness/config.json`); providers merge theo id. */
-export async function loadConfig(cwd: string): Promise<{ config: Config; path?: string }> {
-  const candidates = [
-    ...CONFIG_FILES.map((f) => join(cwd, f)),
-    join(homedir(), ".hahaness", "config.json"),
-  ]
-  const found = candidates.filter((p) => existsSync(p))
-  if (found.length === 0) return { config: ConfigSchema.parse({}) }
+/** Key trong bảng `settings`. */
+export const CONFIG_KEY = "config"
 
-  let merged: Config = { providers: {} }
-  for (const path of found.reverse()) {
-    const parsed = ConfigSchema.parse(JSON.parse(await readFile(path, "utf8")))
-    merged = {
-      defaultModel: parsed.defaultModel ?? merged.defaultModel,
-      providers: { ...merged.providers, ...parsed.providers },
+/**
+ * Cấu hình workspace nằm trong DB (CEO sửa ở trang Cài đặt). Lần đầu mở DB,
+ * `hahaness.json` / `.hahaness/config.json` nếu có được nhập vào DB một lần.
+ * `~/.hahaness/config.json` là mặc định cấp máy; DB thắng, providers merge theo id.
+ */
+export async function loadConfig(cwd: string, db?: Db): Promise<{ config: Config; imported?: string }> {
+  let stored = db?.getSetting<unknown>(CONFIG_KEY)
+  let imported: string | undefined
+  if (stored === undefined) {
+    imported = CONFIG_FILES.map((f) => join(cwd, f)).find((p) => existsSync(p))
+    if (imported) {
+      stored = ConfigSchema.parse(JSON.parse(await readFile(imported, "utf8")))
+      db?.setSetting(CONFIG_KEY, stored)
     }
   }
-  return { config: merged, path: found[0] }
+  const home = join(homedir(), ".hahaness", "config.json")
+  const base = existsSync(home) ? ConfigSchema.parse(JSON.parse(await readFile(home, "utf8"))) : undefined
+  const local = stored !== undefined ? ConfigSchema.parse(stored) : undefined
+  return {
+    config: { defaultModel: local?.defaultModel ?? base?.defaultModel, providers: { ...base?.providers, ...local?.providers } },
+    imported,
+  }
+}
+
+/** Phần cấu hình riêng của workspace (không gồm ~/.hahaness), để UI sửa. */
+export function storedConfig(db: Db): Config {
+  return ConfigSchema.parse(db.getSetting<unknown>(CONFIG_KEY) ?? {})
+}
+
+export function saveConfig(db: Db, config: Config) {
+  db.setSetting(CONFIG_KEY, ConfigSchema.parse(config))
 }
 
 export async function buildProvider(id: string, cfg: ProviderConfig, cwd: string): Promise<ProviderClient> {
@@ -96,7 +113,7 @@ export async function buildProviders(config: Config, cwd: string): Promise<Provi
   const entries = Object.entries(config.providers)
   if (entries.length === 0) {
     const apiKey = process.env.OPENAI_API_KEY ?? process.env.HAHANESS_API_KEY
-    if (!apiKey) throw new Error("No providers configured. Create hahaness.json or set OPENAI_API_KEY.")
+    if (!apiKey) throw new Error("No providers configured. Add one in Settings, or set OPENAI_API_KEY.")
     registry.register("openai", new OpenAIProvider({ apiKey, baseURL: process.env.OPENAI_BASE_URL }), { default: true })
     return registry
   }

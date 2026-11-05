@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -12,9 +12,13 @@ import { define } from "./tool/define.ts"
 import { delegate } from "./tool/builtin/delegate.ts"
 import { hire } from "./tool/builtin/hire.ts"
 import { skill } from "./tool/builtin/skill.ts"
+import { documentTools } from "./tool/builtin/fs.ts"
+import { knowledgeTool, manageSkillTool, staffTool } from "./tool/builtin/manage.ts"
 import { SkillStore } from "./context/skills.ts"
+import { DocumentStore } from "./context/documents.ts"
+import { Db } from "./core/db.ts"
+import { importLegacy } from "./core/migrate.ts"
 import * as workspace from "./context/workspace.ts"
-import { existsSync } from "node:fs"
 import type { ModelRequest, ProviderClient, StreamEvent } from "./provider/types.ts"
 import { evaluate, denied } from "./permission/ruleset.ts"
 import { fromMarkdown } from "./agent/registry.ts"
@@ -41,8 +45,10 @@ const finish = (reason: "stop" | "tool-calls" = "stop"): StreamEvent => ({ type:
 
 async function setup(provider: ProviderClient) {
   const dir = await mkdtemp(join(tmpdir(), "hahaness-"))
-  await workspace.ensure(dir)
-  const agents = await new AgentRegistry().load(join(here, "agent", "builtin"))
+  const db = new Db(join(dir, "test.db"))
+  const docs = new DocumentStore(db)
+  workspace.ensure(docs)
+  const agents = (await new AgentRegistry().load(join(here, "agent", "builtin"))).useDb(db)
   const echo = define({
     name: "echo",
     description: "echo",
@@ -51,11 +57,13 @@ async function setup(provider: ProviderClient) {
       return { output: `echo:${text}` }
     },
   })
-  agents.persistTo(join(dir, "staff"))
-  const tools = new ToolRegistry().register(echo, delegate(agents), hire(agents))
+  const skills = new SkillStore(db)
+  const tools = new ToolRegistry().register(echo, delegate(agents), hire(agents), ...documentTools(docs), knowledgeTool(docs), manageSkillTool(skills), staffTool(agents))
   const harness = new Harness({
     cwd: dir,
-    dataDir: join(dir, ".hahaness"),
+    db,
+    docs,
+    skills,
     providers: new ProviderRegistry().register("mock", provider),
     defaultModel: "mock/mock",
     agents,
@@ -63,7 +71,18 @@ async function setup(provider: ProviderClient) {
     askHandler: async () => ({ kind: "once" }),
     events: {},
   })
-  return { harness, dir, agents, cleanup: () => rm(dir, { recursive: true, force: true }) }
+  return {
+    harness,
+    dir,
+    db,
+    docs,
+    skills,
+    agents,
+    cleanup: async () => {
+      db.close()
+      await rm(dir, { recursive: true, force: true })
+    },
+  }
 }
 
 test("hire: CTO creates a new employee at runtime, persisted, then delegates to them", async () => {
@@ -82,14 +101,13 @@ test("hire: CTO creates a new employee at runtime, persisted, then delegates to 
     },
     () => [{ type: "text-delta", text: "reported" }, finish()],
   ])
-  const { harness, dir, agents, cleanup } = await setup(provider)
+  const { harness, db, agents, cleanup } = await setup(provider)
   try {
     const main = await harness.createSession({ agent: "cto" })
     const outcome = await harness.send(main.session.id, "do an SEO audit")
     assert.equal(outcome.tag, "completed")
     assert.ok(agents.has("seo-specialist"))
-    assert.ok(existsSync(join(dir, "staff", "seo-specialist.md")))
-    const reloaded = await new AgentRegistry().load(join(dir, "staff"))
+    const reloaded = new AgentRegistry().useDb(db)
     assert.equal(reloaded.get("seo-specialist").system, "You audit SEO.")
     assert.equal(reloaded.get("seo-specialist").permissions.find((r) => r.action === "webfetch")?.effect, "allow")
     assert.equal(reloaded.get("seo-specialist").permissions.find((r) => r.action === "websearch")?.effect, "deny")
@@ -111,13 +129,11 @@ test("skills: index in Tier A only when skills exist; `skill` tool loads body; k
       return [{ type: "text-delta", text: "ok" }, finish()]
     },
   ])
-  const { harness, dir, cleanup } = await setup(provider)
+  const { harness, docs, skills: store, cleanup } = await setup(provider)
   try {
-    const store = new SkillStore(join(dir, "skills"))
     assert.equal(await store.index(), undefined)
     await store.write("weekly-report", "---\nname: Weekly report\ndescription: Use for weekly summaries\n---\nStep one.")
-    await writeFile(join(dir, "knowledge", "brand.md"), "# Brand voice\nFriendly.")
-    harness.cfg.skills = store
+    docs.put("knowledge/brand.md", "# Brand voice\nFriendly.")
     harness.cfg.tools.register(skill(store))
     const main = await harness.createSession({ agent: "cto" })
     const outcome = await harness.send(main.session.id, "weekly report please")
@@ -136,7 +152,7 @@ test("resume: a stored session is reloaded with its transcript and continues", a
       return [{ type: "text-delta", text: "second" }, finish()]
     },
   ])
-  const { harness, dir, agents, cleanup } = await setup(provider)
+  const { harness, agents, cleanup } = await setup(provider)
   try {
     const main = await harness.createSession({ agent: "cto" })
     await harness.send(main.session.id, "one")
@@ -149,7 +165,6 @@ test("resume: a stored session is reloaded with its transcript and continues", a
     const outcome = await fresh.send(main.session.id, "two")
     assert.equal(outcome.tag, "completed")
     assert.equal(outcome.tag === "completed" && outcome.text, "second")
-    assert.ok(existsSync(join(dir, ".hahaness", "sessions", `${main.session.id}.jsonl`)))
   } finally {
     await cleanup()
   }
@@ -165,14 +180,13 @@ test("loop: tool call then completion, persisted before execute", async () => {
       return [{ type: "text-delta", text: "ok" }, finish()]
     },
   ])
-  const { harness, dir, cleanup } = await setup(provider)
+  const { harness, cleanup } = await setup(provider)
   try {
     const main = await harness.createSession({ agent: "cto" })
     const outcome = await harness.send(main.session.id, "say hi")
     assert.equal(outcome.tag, "completed")
     assert.equal(provider.requests.length, 2)
-    const log = await readFile(join(dir, ".hahaness", "sessions", `${main.session.id}.jsonl`), "utf8")
-    const kinds = log.trim().split("\n").map((l) => JSON.parse(l).kind)
+    const kinds = (await harness.store.read(main.session.id)).map((e) => e.kind)
     assert.deepEqual(kinds.slice(0, 4), ["session", "claim", "message", "message"])
     assert.equal(kinds.at(-1), "release")
   } finally {
@@ -310,6 +324,149 @@ test("config: custom provider module and env expansion", async () => {
     if (ev.type === "text-delta") events.push(ev.text)
   }
   assert.deepEqual(events, ["pong"])
+})
+
+const call = (name: string, args: unknown, callID = "c1"): StreamEvent[] => [{ type: "tool-call", callID, name, args }, finish("tool-calls")]
+const lastResult = (req: ModelRequest) => req.messages.at(-1)!.parts.find((p) => p.type === "tool-result") as { output: string; isError?: boolean }
+
+test("CTO tools: knowledge, manage_skill, staff change the company; next session sees them", async () => {
+  const provider = scripted([
+    () => call("knowledge", { action: "save", path: "pricing", content: "# Bảng giá 2026\nGói A: 1 triệu" }),
+    (req) => {
+      assert.match(lastResult(req).output, /Saved knowledge\/pricing\.md/)
+      return call("manage_skill", { action: "save", id: "Weekly Report", description: "Use for weekly summaries", instructions: "1. Collect.\n2. Summarize." })
+    },
+    (req) => {
+      assert.match(lastResult(req).output, /Created skill weekly-report/)
+      return call("staff", { action: "edit", id: "writer", capabilities: ["read"], description: "Writes short posts" })
+    },
+    (req) => {
+      assert.match(lastResult(req).output, /Capabilities: read\./)
+      return call("staff", { action: "edit", id: "cto", system: "x" })
+    },
+    (req) => {
+      assert.ok(lastResult(req).isError)
+      return call("staff", { action: "fire", id: "researcher" })
+    },
+    () => [{ type: "text-delta", text: "done" }, finish()],
+    (req) => {
+      assert.match(req.system[0]!, /<skill id="weekly-report">Use for weekly summaries<\/skill>/)
+      assert.match(req.system[1]!, /knowledge\/pricing\.md — Bảng giá 2026/)
+      return [{ type: "text-delta", text: "ok" }, finish()]
+    },
+  ])
+  const { harness, db, docs, agents, cleanup } = await setup(provider)
+  try {
+    harness.cfg.tools.register(skill(harness.cfg.skills!))
+    const first = await harness.createSession({ agent: "cto" })
+    assert.equal((await harness.send(first.session.id, "keep this")).tag, "completed")
+    assert.equal(docs.get("knowledge/pricing.md")?.author, "cto")
+    assert.ok(!agents.has("researcher"))
+    const reloaded = (await new AgentRegistry().load(join(here, "agent", "builtin"))).useDb(db)
+    assert.ok(!reloaded.has("researcher"), "fired role stays fired")
+    assert.equal(reloaded.get("writer").description, "Writes short posts")
+    assert.equal(evaluate(reloaded.get("writer").permissions, "write", "drafts/a.md"), "deny")
+    const second = await harness.createSession({ agent: "cto" })
+    assert.equal((await harness.send(second.session.id, "hi")).tag, "completed")
+  } finally {
+    await cleanup()
+  }
+})
+
+test("employees never get management tools", async () => {
+  const provider = scripted([
+    () => call("delegate", { action: "spawn", agent: "writer", brief: { goal: "g", context: "c", done_when: "d" } }),
+    (req) => {
+      for (const name of ["knowledge", "manage_skill", "staff", "hire", "delegate"]) {
+        assert.ok(!req.tools.some((t) => t.name === name), `employee must not have ${name}`)
+      }
+      assert.ok(req.tools.some((t) => t.name === "read"))
+      return [{ type: "text-delta", text: "draft done" }, finish()]
+    },
+    () => [{ type: "text-delta", text: "ok" }, finish()],
+  ])
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const main = await harness.createSession({ agent: "cto" })
+    assert.equal((await harness.send(main.session.id, "write")).tag, "completed")
+  } finally {
+    await cleanup()
+  }
+})
+
+test("truncated tool output is saved as a hidden document the agent can read", async () => {
+  const provider = scripted([
+    () => call("big", {}, "callbig"),
+    (req) => {
+      assert.match(lastResult(req).output, /full output saved to tool-output\/callbig\.txt/)
+      return [{ type: "text-delta", text: "ok" }, finish()]
+    },
+  ])
+  const { harness, docs, cleanup } = await setup(provider)
+  try {
+    harness.cfg.tools.register(
+      define({ name: "big", description: "big", input: z.object({}), async execute() {
+        return { output: Array.from({ length: 3000 }, (_, i) => `line ${i}`).join("\n") }
+      } }),
+    )
+    const main = await harness.createSession({ agent: "cto" })
+    await harness.send(main.session.id, "go")
+    assert.match(docs.read("tool-output/callbig.txt") ?? "", /line 2999/)
+    assert.ok(!docs.list().some((d) => d.path.startsWith("tool-output/")), "hidden from top-level list")
+  } finally {
+    await cleanup()
+  }
+})
+
+test("documents: path normalization, children, Vietnamese-safe search", () => {
+  const db = new Db(":memory:")
+  try {
+    const docs = new DocumentStore(db)
+    assert.equal(docs.put("\\knowledge\\./Giá.md", "# Giá\nGÓI Cao Cấp"), "knowledge/Giá.md")
+    docs.put("drafts/a/b.md", "x")
+    assert.throws(() => docs.put("../evil.md", "x"), /invalid path/)
+    assert.deepEqual(docs.children("").map((c) => c.name), ["drafts/", "knowledge/"])
+    const hits = docs.search("gói cao")
+    assert.equal(hits[0]?.path, "knowledge/Giá.md")
+    assert.equal(hits[0]?.matches[0]?.line, 2)
+    assert.equal(docs.search("gói", { prefix: "drafts" }).length, 0)
+  } finally {
+    db.close()
+  }
+})
+
+test("importLegacy: old folder layout moves into the DB once", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hahaness-legacy-"))
+  const db = new Db(join(dir, "data", "x.db"))
+  try {
+    assert.ok(db.fresh)
+    await writeFile(join(dir, "COMPANY.md"), "# Acme\nWe sell rockets.")
+    await mkdir(join(dir, "knowledge", "sub"), { recursive: true })
+    await writeFile(join(dir, "knowledge", "sub", "faq.md"), "# FAQ")
+    await mkdir(join(dir, "staff"))
+    await writeFile(join(dir, "staff", "seo.md"), "---\nid: seo\nname: SEO\ndescription: d\n---\nDo SEO.")
+    await mkdir(join(dir, "skills", "brief"), { recursive: true })
+    await writeFile(join(dir, "skills", "brief", "SKILL.md"), "---\nname: Brief\ndescription: Use for briefs\n---\nSteps.")
+    await mkdir(join(dir, ".hahaness", "sessions"), { recursive: true })
+    await writeFile(join(dir, ".hahaness", "mcp.json"), JSON.stringify({ servers: { fs: { type: "stdio", command: "x" } } }))
+    const session = { id: "ses_old", agent: "cto", model: "m", title: "Old", createdAt: 1 }
+    await writeFile(join(dir, ".hahaness", "sessions", "ses_old.jsonl"), JSON.stringify({ kind: "session", session }) + "\n")
+    const docs = new DocumentStore(db)
+    const imported = await importLegacy(dir, db, docs)
+    assert.ok(imported.includes("knowledge/sub/faq.md"))
+    assert.match(docs.read("COMPANY.md")!, /rockets/)
+    assert.equal(new AgentRegistry().useDb(db).get("seo").system, "Do SEO.")
+    assert.equal((await new SkillStore(db).list())[0]?.description, "Use for briefs")
+    assert.equal((db.sql.prepare("SELECT count(*) n FROM mcp_servers").get() as { n: number }).n, 1)
+    const { SessionStore } = await import("./core/store.ts")
+    assert.equal((await new SessionStore(db).listSessions())[0]?.title, "Old")
+  } finally {
+    db.close()
+    await rm(dir, { recursive: true, force: true })
+  }
+  const again = new Db(":memory:")
+  assert.ok(again.fresh)
+  again.close()
 })
 
 test("agent markdown frontmatter parses rules and model list", () => {

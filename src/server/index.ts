@@ -12,6 +12,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 
 export interface ServerOptions {
   cwd: string
+  /** Mặc định `<cwd>/.hahaness/hahaness.db` (hoặc HAHANESS_DB). */
+  dbPath?: string
   port?: number
   host?: string
   /** Thư mục build UI (ui/dist). Không có → chỉ API (dùng Vite dev server + proxy). */
@@ -47,6 +49,7 @@ export async function startServer(opts: ServerOptions) {
 
   const app = await bootstrap({
     cwd: opts.cwd,
+    dbPath: opts.dbPath,
     questionHandler: (q, options) => ask(askingSession, "question", q, options),
     askHandler: async (req) => {
       const a = await ask(req.sessionID, "permission", `${req.agent} wants to ${req.action} ${req.resource}`, ["Allow", "Deny"])
@@ -68,7 +71,7 @@ export async function startServer(opts: ServerOptions) {
   })
 
   const router = new Router()
-  router.get("/api/health", () => ({ ok: true, cwd: app.cwd, providerError: app.providerError ?? null, clients: bus.size }))
+  router.get("/api/health", () => ({ ok: true, db: app.db.path, providerError: app.providerError ?? null, clients: bus.size }))
   router.get("/api/events", (_req, res) => {
     bus.subscribe(res)
   })
@@ -100,12 +103,22 @@ export async function startServer(opts: ServerOptions) {
   const port = opts.port ?? 7331
   const host = opts.host ?? "127.0.0.1"
   await new Promise<void>((resolve) => server.listen(port, host, resolve))
-  return { app, server, url: `http://${host}:${port}`, hasUI, close: () => (app.mcp.closeAll(), server.close()) }
+  const close = () =>
+    new Promise<void>((resolve) => {
+      bus.closeAll()
+      server.closeAllConnections?.()
+      server.close(() => {
+        app.close()
+        resolve()
+      })
+    })
+  return { app, server, url: `http://${host}:${port}`, hasUI, close }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const { url, hasUI, app } = await startServer({ cwd: process.cwd(), port: Number(process.env.PORT ?? 7331) })
   console.log(`Hahaness server: ${url}${hasUI ? "" : "  (API only — run \`npm run ui\` for the interface)"}`)
-  console.log(`Workspace: ${app.cwd}`)
+  console.log(`Company data: ${app.db.path}`)
+  if (app.imported.length) console.log(`Imported from the old folder layout: ${app.imported.join(", ")}`)
   if (app.providerError) console.log(`Provider: ${app.providerError} — configure in Settings.`)
 }

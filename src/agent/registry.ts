@@ -1,8 +1,9 @@
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { readdir, readFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { join, basename } from "node:path"
 import { DEFAULTS, type AgentDef } from "./types.ts"
-import type { Rule } from "../permission/ruleset.ts"
+import { evaluate, type Rule } from "../permission/ruleset.ts"
+import type { Db } from "../core/db.ts"
 
 /** Frontmatter tối giản: key: value, list `- a` hoặc `[a, b]`, rule `- { action: x, resource: y, effect: z }`. */
 function parseFrontmatter(text: string): { meta: Record<string, unknown>; body: string } {
@@ -86,20 +87,47 @@ export function toMarkdown(def: AgentDef): string {
     .join("\n")
 }
 
+export const CAPABILITIES = ["read", "write", "webfetch", "websearch"] as const
+export type Capability = (typeof CAPABILITIES)[number]
+
 export interface HireRequest {
   id: string
   name: string
   description: string
   system: string
   /** Nhân viên mới chỉ được chọn từ các "quyền" an toàn; CTO không cấp được hơn chính mình. */
-  capabilities: Array<"read" | "write" | "webfetch" | "websearch">
+  capabilities: Capability[]
+}
+
+/** Tool chỉ CTO dùng; nhân viên luôn bị deny (harness cũng deny lúc spawn). */
+export const MANAGEMENT_ACTIONS = ["delegate", "hire", "memory", "question", "knowledge", "manage_skill", "staff", "mcp_manage"] as const
+
+export function capabilityRules(capabilities: readonly Capability[]): Rule[] {
+  const caps = new Set(capabilities)
+  return [
+    { action: "read", resource: "*", effect: caps.has("read") ? "allow" : "deny" },
+    { action: "write", resource: "drafts/*", effect: caps.has("write") ? "allow" : "deny" },
+    { action: "write", resource: "*", effect: "deny" },
+    { action: "webfetch", resource: "*", effect: caps.has("webfetch") ? "allow" : "deny" },
+    { action: "websearch", resource: "*", effect: caps.has("websearch") ? "allow" : "deny" },
+    ...MANAGEMENT_ACTIONS.filter((a) => a !== "question").map((action) => ({ action, resource: "*", effect: "deny" as const })),
+  ]
+}
+
+/** Đọc ngược capability từ ruleset (để CTO xem/sửa nhân viên). */
+export function capabilitiesOf(def: AgentDef): Capability[] {
+  return CAPABILITIES.filter((c) => evaluate(def.permissions, c, c === "write" ? "drafts/x" : "x") === "allow")
+}
+
+export function slugID(id: string) {
+  return id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "")
 }
 
 export class AgentRegistry {
   private agents = new Map<string, AgentDef>()
-  private hireDir?: string
+  private db?: Db
 
-  /** Load builtin trước, user `agents/` sau — cùng id thì user thắng, permissions nối thêm. */
+  /** Load builtin `.md` (vai có sẵn). Cùng id thì cái sau thắng, permissions nối thêm. */
   async load(...dirs: string[]) {
     for (const dir of dirs) {
       if (!existsSync(dir)) continue
@@ -113,10 +141,26 @@ export class AgentRegistry {
     return this
   }
 
-  /** Thư mục nhân viên do CTO tuyển sẽ được ghi vào (persist qua các session). */
-  persistTo(dir: string) {
-    this.hireDir = dir
+  /**
+   * Nhân viên trong DB (bảng `staff`) đè lên vai có sẵn; `fired = 1` xóa vai đó.
+   * Từ đây mọi hire/update/fire ghi vào DB.
+   */
+  useDb(db: Db) {
+    this.db = db
+    const rows = db.sql.prepare("SELECT id, markdown, fired FROM staff").all() as Array<{ id: string; markdown: string; fired: number }>
+    for (const r of rows) {
+      const current = this.agents.get(r.id)
+      if (current?.mode === "primary") continue
+      if (Number(r.fired)) this.agents.delete(r.id)
+      else this.agents.set(r.id, fromMarkdown(r.markdown, r.id))
+    }
     return this
+  }
+
+  private persist(def: AgentDef, markdown = toMarkdown(def)) {
+    this.db?.sql
+      .prepare("INSERT INTO staff(id, markdown, fired, updated_at) VALUES(?, ?, 0, ?) ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown, fired = 0, updated_at = excluded.updated_at")
+      .run(def.id, markdown, Date.now())
   }
 
   get(id: string) {
@@ -130,10 +174,9 @@ export class AgentRegistry {
   }
 
   async hire(req: HireRequest): Promise<AgentDef> {
-    const id = req.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "")
+    const id = slugID(req.id)
     if (!id) throw new Error("hire: invalid id")
     if (this.agents.get(id)?.mode === "primary") throw new Error(`hire: cannot replace primary agent ${id}`)
-    const caps = new Set(req.capabilities)
     const def: AgentDef = {
       ...DEFAULTS,
       id,
@@ -141,36 +184,38 @@ export class AgentRegistry {
       description: req.description,
       mode: "subagent",
       steps: 30,
-      permissions: [
-        { action: "read", resource: "*", effect: caps.has("read") ? "allow" : "deny" },
-        { action: "write", resource: "drafts/*", effect: caps.has("write") ? "allow" : "deny" },
-        { action: "write", resource: "*", effect: "deny" },
-        { action: "webfetch", resource: "*", effect: caps.has("webfetch") ? "allow" : "deny" },
-        { action: "websearch", resource: "*", effect: caps.has("websearch") ? "allow" : "deny" },
-        { action: "delegate", resource: "*", effect: "deny" },
-        { action: "hire", resource: "*", effect: "deny" },
-        { action: "memory", resource: "*", effect: "deny" },
-      ],
+      permissions: capabilityRules(req.capabilities),
       system: req.system,
     }
     this.agents.set(id, def)
-    if (this.hireDir) {
-      await mkdir(this.hireDir, { recursive: true })
-      await writeFile(join(this.hireDir, `${id}.md`), toMarkdown(def), "utf8")
-    }
+    this.persist(def)
     return def
   }
 
-  /** CEO sửa tay: ghi đè toàn bộ định nghĩa (chỉ vai trong staff/, không đụng builtin primary). */
+  /** Sửa từng phần (tool `staff` của CTO). Đổi capabilities thì dựng lại ruleset chuẩn. */
+  async edit(id: string, patch: Partial<Pick<AgentDef, "name" | "description" | "system">> & { capabilities?: Capability[] }): Promise<AgentDef> {
+    const prev = this.get(id)
+    if (prev.mode === "primary") throw new Error(`edit: cannot edit primary agent ${id}`)
+    const def: AgentDef = {
+      ...prev,
+      name: patch.name ?? prev.name,
+      description: patch.description ?? prev.description,
+      system: patch.system ?? prev.system,
+      permissions: patch.capabilities ? capabilityRules(patch.capabilities) : prev.permissions,
+    }
+    this.agents.set(id, def)
+    this.persist(def)
+    return def
+  }
+
+  /** CEO sửa tay toàn bộ markdown (UI). Không đụng vai primary. */
   async update(id: string, text: string): Promise<AgentDef> {
     const def = fromMarkdown(text, id)
     if (def.id !== id) throw new Error(`update: id in frontmatter (${def.id}) must match ${id}`)
     if (this.agents.get(id)?.mode === "primary") throw new Error(`update: cannot edit primary agent ${id}`)
+    if (def.mode === "primary") throw new Error("update: staff cannot be made primary")
     this.agents.set(id, def)
-    if (this.hireDir) {
-      await mkdir(this.hireDir, { recursive: true })
-      await writeFile(join(this.hireDir, `${id}.md`), text, "utf8")
-    }
+    this.persist(def, text)
     return def
   }
 
@@ -179,7 +224,9 @@ export class AgentRegistry {
     if (!def) throw new Error(`unknown agent: ${id}`)
     if (def.mode === "primary") throw new Error(`fire: cannot fire primary agent ${id}`)
     this.agents.delete(id)
-    if (this.hireDir) await rm(join(this.hireDir, `${id}.md`), { force: true })
+    this.db?.sql
+      .prepare("INSERT INTO staff(id, markdown, fired, updated_at) VALUES(?, ?, 1, ?) ON CONFLICT(id) DO UPDATE SET fired = 1, updated_at = excluded.updated_at")
+      .run(id, toMarkdown(def), Date.now())
   }
 
   list(mode?: AgentDef["mode"]) {

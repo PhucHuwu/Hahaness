@@ -1,9 +1,8 @@
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
-import { existsSync } from "node:fs"
-import { join } from "node:path"
+import type { Db } from "../core/db.ts"
 
 /**
- * skills/<id>/SKILL.md — frontmatter `name`, `description`; phần thân là hướng dẫn.
+ * Kỹ năng (quy trình làm việc) lưu trong bảng `skills`. Nội dung là markdown có
+ * frontmatter `name`, `description`; phần thân là hướng dẫn.
  * Chỉ index (id + description) vào system prompt; nội dung load qua tool `skill`.
  */
 export interface SkillMeta {
@@ -12,7 +11,7 @@ export interface SkillMeta {
   description: string
 }
 
-function parse(text: string): { meta: Record<string, string>; body: string } {
+export function parseSkill(text: string): { meta: Record<string, string>; body: string } {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text)
   if (!m) return { meta: {}, body: text }
   const meta: Record<string, string> = {}
@@ -23,42 +22,42 @@ function parse(text: string): { meta: Record<string, string>; body: string } {
   return { meta, body: m[2]!.trim() }
 }
 
-export class SkillStore {
-  constructor(readonly dir: string) {}
+export function slug(id: string) {
+  return id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "")
+}
 
-  private file(id: string) {
-    return join(this.dir, id, "SKILL.md")
-  }
+export function skillMarkdown(name: string, description: string, body: string) {
+  const line = (s: string) => s.replace(/\r?\n/g, " ").trim()
+  return `---\nname: ${line(name)}\ndescription: ${line(description)}\n---\n${body.trim()}\n`
+}
+
+export class SkillStore {
+  constructor(private db: Db) {}
 
   async list(): Promise<SkillMeta[]> {
-    if (!existsSync(this.dir)) return []
-    const out: SkillMeta[] = []
-    for (const entry of await readdir(this.dir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
-      const path = this.file(entry.name)
-      if (!existsSync(path)) continue
-      const { meta } = parse(await readFile(path, "utf8"))
-      out.push({ id: entry.name, name: meta.name ?? entry.name, description: meta.description ?? "" })
-    }
-    return out
+    const rows = this.db.sql.prepare("SELECT id, content FROM skills ORDER BY id").all() as Array<{ id: string; content: string }>
+    return rows.map((r) => {
+      const { meta } = parseSkill(r.content)
+      return { id: r.id, name: meta.name ?? r.id, description: meta.description ?? "" }
+    })
   }
 
   async read(id: string): Promise<string | undefined> {
-    const path = this.file(id)
-    if (!existsSync(path)) return undefined
-    return readFile(path, "utf8")
+    const row = this.db.sql.prepare("SELECT content FROM skills WHERE id = ?").get(id) as { content: string } | undefined
+    return row?.content
   }
 
   async write(id: string, content: string) {
-    const slug = id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "")
-    if (!slug) throw new Error("invalid skill id")
-    await mkdir(join(this.dir, slug), { recursive: true })
-    await writeFile(this.file(slug), content, "utf8")
-    return slug
+    const s = slug(id)
+    if (!s) throw new Error("invalid skill id")
+    this.db.sql
+      .prepare("INSERT INTO skills(id, content, updated_at) VALUES(?, ?, ?) ON CONFLICT(id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at")
+      .run(s, content, Date.now())
+    return s
   }
 
-  async remove(id: string) {
-    await rm(join(this.dir, id), { recursive: true, force: true })
+  async remove(id: string): Promise<boolean> {
+    return Number(this.db.sql.prepare("DELETE FROM skills WHERE id = ?").run(id).changes) > 0
   }
 
   /** Khối `<available_skills>` cho Tier A. Rỗng → undefined để không chiếm token. */
@@ -70,6 +69,6 @@ export class SkillStore {
   }
 
   static template(id: string) {
-    return `---\nname: ${id}\ndescription: When to use this skill, in one sentence.\n---\n# ${id}\n\nStep-by-step instructions the employee should follow.\n`
+    return skillMarkdown(id, "When to use this skill, in one sentence.", `# ${id}\n\nStep-by-step instructions the employee should follow.`)
   }
 }

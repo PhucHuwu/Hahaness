@@ -5,10 +5,13 @@ import { AgentRegistry } from "./agent/registry.ts"
 import { ToolRegistry } from "./tool/registry.ts"
 import { buildProviders, loadConfig, type Config } from "./config.ts"
 import { ProviderRegistry } from "./provider/registry.ts"
+import { Db } from "./core/db.ts"
+import { importLegacy } from "./core/migrate.ts"
+import { DocumentStore } from "./context/documents.ts"
 import { SkillStore } from "./context/skills.ts"
 import { McpManager } from "./mcp/manager.ts"
 import * as workspace from "./context/workspace.ts"
-import { read, list, write } from "./tool/builtin/fs.ts"
+import { documentTools } from "./tool/builtin/fs.ts"
 import { webfetch, websearch } from "./tool/builtin/web.ts"
 import { todo } from "./tool/builtin/todo.ts"
 import { memory } from "./tool/builtin/memory.ts"
@@ -16,6 +19,7 @@ import { question, type QuestionHandler } from "./tool/builtin/question.ts"
 import { delegate } from "./tool/builtin/delegate.ts"
 import { hire } from "./tool/builtin/hire.ts"
 import { skill } from "./tool/builtin/skill.ts"
+import { knowledgeTool, manageSkillTool, mcpTool, staffTool } from "./tool/builtin/manage.ts"
 import type { AskHandler } from "./permission/ask.ts"
 import type { LoopEvents } from "./core/loop.ts"
 
@@ -23,20 +27,25 @@ const here = dirname(fileURLToPath(import.meta.url))
 
 export interface App {
   cwd: string
-  dataDir: string
+  db: Db
+  docs: DocumentStore
   config: Config
-  configPath?: string
   /** Lỗi khi dựng provider (vd thiếu API key) — UI hiển thị thay vì thoát. */
   providerError?: string
+  /** Mục đã nhập từ workspace dạng file cũ trong lần chạy này. */
+  imported: string[]
   agents: AgentRegistry
   tools: ToolRegistry
   skills: SkillStore
   mcp: McpManager
   harness: Harness
+  close(): void
 }
 
 export interface BootstrapOptions {
   cwd: string
+  /** Mặc định `<cwd>/.hahaness/hahaness.db`, hoặc env HAHANESS_DB. `:memory:` cho test. */
+  dbPath?: string
   events: LoopEvents
   askHandler: AskHandler
   questionHandler: QuestionHandler
@@ -44,12 +53,19 @@ export interface BootstrapOptions {
   mcp?: boolean
 }
 
-/** Wiring chuẩn: workspace, vai, tool builtin, skills, MCP, harness. */
+export function defaultDbPath(cwd: string) {
+  return process.env.HAHANESS_DB ?? join(cwd, ".hahaness", "hahaness.db")
+}
+
+/** Wiring chuẩn: DB, workspace, vai, tool builtin, skills, MCP, harness. */
 export async function bootstrap(opts: BootstrapOptions): Promise<App> {
   const { cwd } = opts
-  const dataDir = join(cwd, ".hahaness")
-  const { config, path: configPath } = await loadConfig(cwd)
+  const db = new Db(opts.dbPath ?? defaultDbPath(cwd))
+  const docs = new DocumentStore(db)
+  const imported = db.fresh && opts.dbPath !== ":memory:" ? await importLegacy(cwd, db, docs) : []
+  workspace.ensure(docs)
 
+  const { config } = await loadConfig(cwd, db)
   let providers = new ProviderRegistry()
   let providerError: string | undefined
   try {
@@ -58,25 +74,32 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
     providerError = (e as Error).message
   }
 
-  await workspace.ensure(cwd)
-  const staffDir = join(cwd, "staff")
-  const agents = await new AgentRegistry().load(join(here, "agent", "builtin"), staffDir)
-  agents.persistTo(staffDir)
-  const skills = new SkillStore(join(cwd, "skills"))
+  const agents = (await new AgentRegistry().load(join(here, "agent", "builtin"))).useDb(db)
+  const skills = new SkillStore(db)
 
-  const tools = new ToolRegistry().register(
-    read, list, write, webfetch, websearch, todo, memory,
+  const tools = new ToolRegistry()
+  const mcp = new McpManager(db, tools)
+  tools.register(
+    ...documentTools(docs),
+    webfetch,
+    websearch,
+    todo,
+    memory(docs),
     question(opts.questionHandler),
     delegate(agents),
     hire(agents),
     skill(skills),
+    knowledgeTool(docs),
+    manageSkillTool(skills),
+    staffTool(agents),
+    mcpTool(mcp),
   )
-  const mcp = new McpManager(join(dataDir, "mcp.json"), tools)
-  if (opts.mcp !== false) await mcp.load()
+  await mcp.load({ connect: opts.mcp !== false })
 
   const harness = new Harness({
     cwd,
-    dataDir,
+    db,
+    docs,
     providers,
     defaultModel: process.env.HAHANESS_MODEL ?? config.defaultModel ?? "gpt-4.1",
     agents,
@@ -87,5 +110,9 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
     events: opts.events,
   })
 
-  return { cwd, dataDir, config, configPath, providerError, agents, tools, skills, mcp, harness }
+  const close = () => {
+    mcp.closeAll()
+    db.close()
+  }
+  return { cwd, db, docs, config, providerError, imported, agents, tools, skills, mcp, harness, close }
 }

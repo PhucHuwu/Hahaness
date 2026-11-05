@@ -8,7 +8,15 @@ const CORE: Record<string, string> = {
   "MEMORY.md": "CTO tự ghi nhớ qua các phiên. Bạn có thể sửa hoặc xóa bớt.",
 }
 
-type Selection = { kind: "core" | "knowledge" | "output"; path: string } | { kind: "staff"; id: string }
+const WHO: Record<string, string> = { ceo: "bạn", cto: "CTO" }
+
+function updated(d?: { size: number; updatedAt: number; author: string | null }) {
+  if (!d || d.size === 0) return "Trống"
+  const by = d.author ? ` · ${WHO[d.author] ?? d.author}` : ""
+  return `${d.size} ký tự · ${new Date(d.updatedAt).toLocaleDateString()}${by}`
+}
+
+type Selection = { kind: "core" | "knowledge"; path: string } | { kind: "staff"; id: string }
 
 export function Knowledge() {
   const [view, setView] = useState<KnowledgeView>()
@@ -42,7 +50,7 @@ export function Knowledge() {
     <div className="page">
       <header>
         <h1>Tri thức</h1>
-        <p>Những gì công ty biết: mô tả công ty, về bạn, tài liệu tham khảo, nhân viên.</p>
+        <p>Những gì công ty biết: mô tả công ty, về bạn, tài liệu tham khảo, nhân viên. Bạn chỉ cần dặn CTO trong Chat ("ghi nhớ bảng giá này", "tuyển thêm người viết"); trang này để xem và sửa khi cần.</p>
       </header>
       {error && <div className="notice err" style={{ marginBottom: 16 }}>{error}</div>}
       <div className="split" style={{ height: "calc(100% - 70px)" }}>
@@ -53,7 +61,7 @@ export function Knowledge() {
               {Object.keys(CORE).map((p) => (
                 <button key={p} className={active({ kind: "core", path: p }) ? "active" : undefined} onClick={() => setSel({ kind: "core", path: p })}>
                   <div className="title mono">{p}</div>
-                  <div className="sub">{view?.core.find((c) => c.path === p)?.size ?? 0} ký tự</div>
+                  <div className="sub">{updated(view?.core.find((c) => c.path === p))}</div>
                 </button>
               ))}
             </div>
@@ -66,11 +74,11 @@ export function Knowledge() {
               </button>
             </div>
             <div className="list">
-              {view?.files.length === 0 && <div className="empty small">Chưa có. Bỏ file .md/.txt/.csv vào thư mục knowledge/ hoặc bấm Thêm.</div>}
+              {view?.files.length === 0 && <div className="empty small">Chưa có. Gửi tài liệu cho CTO trong Chat, hoặc bấm Thêm.</div>}
               {view?.files.map((f) => (
                 <button key={f.path} className={active({ kind: "knowledge", path: f.path }) ? "active" : undefined} onClick={() => setSel({ kind: "knowledge", path: f.path })}>
                   <div className="title mono">{f.path.replace(/^knowledge\//, "")}</div>
-                  <div className="sub">{f.title || `${f.size} ký tự`}</div>
+                  <div className="sub">{f.title || updated(f)}</div>
                 </button>
               ))}
             </div>
@@ -93,23 +101,10 @@ export function Knowledge() {
               ))}
             </div>
           </section>
-          <section>
-            <h3>Kết quả</h3>
-            <div className="list">
-              {view?.outputs.length === 0 && <div className="empty small">deliverables/ và drafts/ còn trống.</div>}
-              {view?.outputs.map((f) => (
-                <button key={f.path} className={active({ kind: "output", path: f.path }) ? "active" : undefined} onClick={() => setSel({ kind: "output", path: f.path })}>
-                  <div className="title mono">{f.path}</div>
-                  <div className="sub">{new Date(f.mtime).toLocaleString()}</div>
-                </button>
-              ))}
-            </div>
-          </section>
         </div>
         <div className="card" style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {sel.kind === "core" && <FileEditor key={sel.path} path={sel.path} hint={CORE[sel.path]} onSaved={load} />}
           {sel.kind === "knowledge" && <FileEditor key={sel.path} path={sel.path} deletable onSaved={load} onDeleted={() => (setSel({ kind: "core", path: "COMPANY.md" }), load())} />}
-          {sel.kind === "output" && <OutputViewer key={sel.path} path={sel.path} />}
           {sel.kind === "staff" && <StaffEditor key={sel.id} id={sel.id} staff={staff} onChanged={(id) => (load(), id && setSel({ kind: "staff", id }))} />}
         </div>
       </div>
@@ -138,29 +133,7 @@ function FileEditor({ path, hint, deletable, onSaved, onDeleted }: { path: strin
   if (error) return <div className="notice err">{error}</div>
   if (content === undefined) return <div className="empty">Đang tải…</div>
   return (
-    <Editor title={path} hint={hint ?? "Nhân viên đọc file này bằng tool `read` khi cần; tên file + dòng đầu được liệt kê trong system prompt."} initial={content} onSave={save} onDelete={deletable ? remove : undefined} />
-  )
-}
-
-function OutputViewer({ path }: { path: string }) {
-  const [content, setContent] = useState<string>()
-  const [error, setError] = useState<string>()
-  useEffect(() => {
-    api
-      .get<{ content: string }>(`/api/outputs/file?path=${encodeURIComponent(path)}`)
-      .then((r) => setContent(r.content))
-      .catch((e) => setError((e as Error).message))
-  }, [path])
-  if (error) return <div className="notice err">{error}</div>
-  if (content === undefined) return <div className="empty">Đang tải…</div>
-  return (
-    <div className="stack" style={{ minHeight: 0 }}>
-      <div className="row between">
-        <h2 className="mono">{path}</h2>
-        <span className="small muted">Chỉ đọc — CTO và nhân viên ghi file này.</span>
-      </div>
-      <pre style={{ overflow: "auto", flex: 1 }}>{content}</pre>
-    </div>
+    <Editor title={path} hint={hint ?? "Nhân viên đọc tài liệu này khi cần; tên và dòng tiêu đề đầu tiên được liệt kê cho mọi nhân viên. Thay đổi áp dụng từ cuộc trò chuyện mới."} initial={content} onSave={save} onDelete={deletable ? remove : undefined} />
   )
 }
 
@@ -193,7 +166,7 @@ function StaffEditor({ id, staff, onChanged }: { id: string; staff: Staff[]; onC
     return (
       <div className="stack">
         <h2>Tuyển nhân viên</h2>
-        <p className="small muted">Giống như CTO gọi tool `hire`: chọn năng lực, viết mô tả công việc. Vai mới được ghi vào staff/&lt;id&gt;.md.</p>
+        <p className="small muted">Giống như CTO gọi tool `hire`: chọn năng lực, viết mô tả công việc. Thường bạn chỉ cần bảo CTO tuyển người.</p>
         {error && <div className="notice err">{error}</div>}
         <div className="row">
           <label className="field grow">
@@ -241,14 +214,14 @@ function StaffEditor({ id, staff, onChanged }: { id: string; staff: Staff[]; onC
     onChanged(id)
   }
   const fire = async () => {
-    if (!confirm(`Cho ${def.name} nghỉ việc? File staff/${id}.md sẽ bị xóa.`)) return
+    if (!confirm(`Cho ${def.name} nghỉ việc? CTO sẽ không giao việc cho vai này nữa.`)) return
     await api.delete(`/api/staff/${id}`)
     onChanged()
   }
   return (
     <Editor
       title={`${def.name} (${id})`}
-      hint={builtin ? "Vai CTO là vai có sẵn, không sửa được từ đây." : "Frontmatter: mode, steps, context, permissions. Phần thân là mô tả công việc. Lưu sẽ ghi đè staff/<id>.md (kể cả vai có sẵn — bản ghi đè thắng)."}
+      hint={builtin ? "Vai CTO là vai có sẵn, không sửa được từ đây." : "Frontmatter: mode, steps, context, permissions. Phần thân là mô tả công việc. Lưu sẽ ghi đè định nghĩa vai này (kể cả vai có sẵn — bản sửa thắng)."}
       initial={markdown}
       readOnly={builtin}
       onSave={save}

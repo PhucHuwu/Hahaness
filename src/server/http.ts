@@ -111,6 +111,11 @@ export class SseBus {
   get size() {
     return this.clients.size
   }
+
+  closeAll() {
+    for (const c of this.clients) c.end()
+    this.clients.clear()
+  }
 }
 
 const MIME: Record<string, string> = {

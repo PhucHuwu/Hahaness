@@ -38,7 +38,7 @@ export interface TurnContext {
   messages: Message[]
   compactionSummary?: { summary: string; keepFromID: string; id: string; createdAt: number }
   estimate: Estimate
-  outputDir: string
+  saveOutput?: (callID: string, output: string) => string
   events: LoopEvents
   signal: AbortSignal
 }
@@ -191,7 +191,7 @@ function launchTool(ctx: TurnContext, ev: Extract<StreamEvent, { type: "tool-cal
   const run = async (): Promise<Part> => {
     if (!tool) return { type: "tool-result", callID: ev.callID, name: ev.name, output: `Unknown tool: ${ev.name}`, isError: true }
     ctx.events.onToolStart?.(ctx.sessionID, ev.name, ev.args, ev.callID)
-    const result = await executeTool(tool, ev.args, { ...ctx.toolContext, signal: ctx.signal }, { outputDir: ctx.outputDir, callID: ev.callID })
+    const result = await executeTool(tool, ev.args, { ...ctx.toolContext, signal: ctx.signal }, { saveOutput: ctx.saveOutput, callID: ev.callID })
     ctx.events.onToolEnd?.(ctx.sessionID, ev.name, result.output, result.isError ?? false, ev.callID)
     return { type: "tool-result", callID: ev.callID, name: ev.name, output: result.output, isError: result.isError ?? false }
   }

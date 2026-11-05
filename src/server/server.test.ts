@@ -1,16 +1,17 @@
 import { test, before, after } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises"
-import { existsSync } from "node:fs"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { startServer } from "./index.ts"
+import type { App } from "../bootstrap.ts"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
 let dir: string
 let base: string
-let close: () => void
+let app: App
+let close: () => Promise<void>
 
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), "hahaness-server-"))
@@ -18,14 +19,17 @@ before(async () => {
     join(dir, "hahaness.json"),
     JSON.stringify({ defaultModel: "scripted/any", providers: { scripted: { type: "custom", module: join(root, "examples", "providers", "scripted.ts") } } }),
   )
-  const s = await startServer({ cwd: dir, port: 0, uiDir: join(dir, "no-ui") })
+  const s = await startServer({ cwd: dir, dbPath: join(dir, "data", "company.db"), port: 0, uiDir: join(dir, "no-ui") })
   base = `http://127.0.0.1:${(s.server.address() as { port: number }).port}`
+  app = s.app
   close = s.close
 })
 after(async () => {
-  close()
+  await close()
   await rm(dir, { recursive: true, force: true })
 })
+
+const staffRow = (id: string) => app.db.sql.prepare("SELECT fired FROM staff WHERE id = ?").get(id) as { fired: number } | undefined
 
 const get = async <T>(p: string) => (await fetch(base + p)).json() as Promise<T>
 const send = async <T>(method: string, p: string, body?: unknown) => {
@@ -62,13 +66,16 @@ async function waitEvent(pred: (ev: any) => boolean, ms = 10_000): Promise<any> 
   }
 }
 
-test("health + config via custom provider from hahaness.json", async () => {
-  const h = await get<{ ok: boolean; providerError: string | null }>("/api/health")
+test("health + config: hahaness.json is imported into the DB on first run", async () => {
+  const h = await get<{ ok: boolean; providerError: string | null; db: string }>("/api/health")
   assert.equal(h.ok, true)
   assert.equal(h.providerError, null)
-  const c = await get<{ providers: string[]; defaultModel: string }>("/api/config")
+  assert.equal(h.db, join(dir, "data", "company.db"))
+  const c = await get<{ providers: string[]; defaultModel: string; config: { defaultModel?: string } }>("/api/config")
   assert.deepEqual(c.providers, ["scripted"])
   assert.equal(c.defaultModel, "scripted/any")
+  assert.equal(c.config.defaultModel, "scripted/any")
+  assert.deepEqual(app.db.getSetting<{ defaultModel: string }>("config")?.defaultModel, "scripted/any")
 })
 
 test("chat: create session, send message, stream text over SSE, transcript persisted", async () => {
@@ -90,7 +97,7 @@ test("staff: hire via API persists markdown, update and fire", async () => {
   const { status, data } = await send<{ id: string }>("POST", "/api/staff", { id: "SEO Guy", name: "SEO", description: "seo", system: "You do SEO.", capabilities: ["read", "websearch"] })
   assert.equal(status, 200)
   assert.equal(data.id, "seo-guy")
-  assert.ok(existsSync(join(dir, "staff", "seo-guy.md")))
+  assert.equal(staffRow("seo-guy")?.fired, 0)
   const md = await get<{ markdown: string }>("/api/staff/seo-guy/markdown")
   assert.match(md.markdown, /websearch, resource: "\*", effect: allow/)
   const upd = await send("PUT", "/api/staff/seo-guy", { markdown: md.markdown.replace("You do SEO.", "You do great SEO.") })
@@ -101,7 +108,7 @@ test("staff: hire via API persists markdown, update and fire", async () => {
   assert.equal(primary.status, 500)
   const fired = await send("DELETE", "/api/staff/seo-guy")
   assert.equal(fired.status, 200)
-  assert.ok(!existsSync(join(dir, "staff", "seo-guy.md")))
+  assert.equal(staffRow("seo-guy")?.fired, 1)
 })
 
 test("knowledge: core files, knowledge/ CRUD, path jail", async () => {
@@ -114,7 +121,11 @@ test("knowledge: core files, knowledge/ CRUD, path jail", async () => {
   assert.equal(bad.status, 400)
   const core = await send("PUT", "/api/knowledge/file", { path: "COMPANY.md", content: "# Acme\nWe sell anvils." })
   assert.equal(core.status, 200)
-  assert.equal(await readFile(join(dir, "COMPANY.md"), "utf8"), "# Acme\nWe sell anvils.")
+  const company = await get<{ content: string }>("/api/knowledge/file?path=COMPANY.md")
+  assert.equal(company.content, "# Acme\nWe sell anvils.")
+  assert.equal(app.docs.get("COMPANY.md")?.author, "ceo")
+  const outside = await fetch(base + "/api/knowledge/file?path=drafts%2Fx.md")
+  assert.equal(outside.status, 400)
   const del = await fetch(base + "/api/knowledge/file?path=knowledge%2Fbrand.md", { method: "DELETE" })
   assert.equal(del.status, 200)
   const noCoreDelete = await fetch(base + "/api/knowledge/file?path=COMPANY.md", { method: "DELETE" })
@@ -160,9 +171,32 @@ test("mcp: add stdio server, tools registered as <server>_<tool>, model can call
   const off = await send<{ state: string; tools: unknown[] }>("POST", "/api/mcp/echo-test/enabled", { enabled: false })
   assert.equal(off.data.state, "disabled")
   assert.equal(off.data.tools.length, 0)
-  const saved = JSON.parse(await readFile(join(dir, ".hahaness", "mcp.json"), "utf8"))
-  assert.equal(saved.servers["echo-test"].enabled, false)
+  assert.equal(app.mcp.saved("echo-test")?.enabled, false)
+  const row = app.db.sql.prepare("SELECT config FROM mcp_servers WHERE id = ?").get("echo-test") as { config: string }
+  assert.equal(JSON.parse(row.config).enabled, false)
   const rm = await fetch(base + "/api/mcp/echo-test", { method: "DELETE" })
   assert.equal(rm.status, 200)
   assert.deepEqual(await get("/api/mcp"), [])
+  assert.equal(app.db.sql.prepare("SELECT 1 FROM mcp_servers WHERE id = ?").get("echo-test"), undefined)
+})
+
+test("results: deliverables and drafts are listed, viewed, downloaded and deleted", async () => {
+  app.docs.put("deliverables/Kế hoạch Q1.md", "# Kế hoạch Q1\nBa mục tiêu.", "cto")
+  app.docs.put("drafts/post.md", "# Post\nDraft.", "writer")
+  app.docs.put("knowledge/secret.md", "x")
+  const list = await get<{ deliverables: Array<{ path: string; title: string; author: string }>; drafts: Array<{ path: string }> }>("/api/results")
+  assert.deepEqual(list.deliverables.map((d) => [d.path, d.title, d.author]), [["deliverables/Kế hoạch Q1.md", "Kế hoạch Q1", "cto"]])
+  assert.deepEqual(list.drafts.map((d) => d.path), ["drafts/post.md"])
+  const q = encodeURIComponent("deliverables/Kế hoạch Q1.md")
+  const file = await get<{ content: string }>(`/api/results/file?path=${q}`)
+  assert.match(file.content, /Ba mục tiêu/)
+  const dl = await fetch(base + `/api/results/download?path=${q}`)
+  assert.equal(dl.status, 200)
+  assert.match(dl.headers.get("content-type")!, /text\/markdown/)
+  assert.match(dl.headers.get("content-disposition")!, /attachment; filename=".*\.md"; filename\*=UTF-8''K%E1%BA%BF/)
+  assert.equal(await dl.text(), "# Kế hoạch Q1\nBa mục tiêu.")
+  assert.equal((await fetch(base + "/api/results/file?path=knowledge%2Fsecret.md")).status, 400)
+  assert.equal((await fetch(base + "/api/results/download?path=deliverables%2Fnope.md")).status, 404)
+  assert.equal((await fetch(base + `/api/results/file?path=${q}`, { method: "DELETE" })).status, 200)
+  assert.equal(app.docs.has("deliverables/Kế hoạch Q1.md"), false)
 })

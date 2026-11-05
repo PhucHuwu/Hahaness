@@ -6,8 +6,9 @@ import { truncate } from "./output.ts"
 import { id } from "../core/id.ts"
 
 export interface ExecuteOptions {
-  outputDir: string
   callID: string
+  /** Nơi lưu output đầy đủ khi bị cắt; trả path đọc lại được. */
+  saveOutput?: (callID: string, output: string) => string
 }
 
 /** Pipeline một tool-call. Không bao giờ throw: mọi lỗi thành ToolResult.isError. */
@@ -33,8 +34,8 @@ export async function executeTool(tool: Tool, rawInput: unknown, ctx: ToolContex
   const signal = AbortSignal.any([ctx.signal, timeout.signal])
   try {
     const result = await tool.execute(input, { ...ctx, signal })
-    const output = await truncate(result.output, {
-      dir: opts.outputDir,
+    const output = truncate(result.output, {
+      save: opts.saveOutput,
       callID: opts.callID,
       tail: result.metadata?.tail === true,
     })

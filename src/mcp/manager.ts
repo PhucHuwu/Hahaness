@@ -1,7 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import { existsSync } from "node:fs"
-import { dirname } from "node:path"
 import { z } from "zod"
+import type { Db } from "../core/db.ts"
 import { McpClient, type McpServerConfig, type McpTool } from "./client.ts"
 import type { Tool } from "../tool/define.ts"
 import type { ToolRegistry } from "../tool/registry.ts"
@@ -36,7 +34,7 @@ export interface McpServerStatus {
 }
 
 /**
- * Quản lý server MCP: đọc/ghi `<dataDir>/mcp.json`, kết nối, đăng ký tool vào
+ * Quản lý server MCP: cấu hình trong bảng `mcp_servers`, kết nối, đăng ký tool vào
  * ToolRegistry dưới tên `<server>_<tool>` với permission `mcp:<server>:<tool>`.
  * Tool MCP có sẵn cho mọi vai trừ khi ruleset deny `mcp:*`.
  */
@@ -45,14 +43,19 @@ export class McpManager {
   private clients = new Map<string, McpClient>()
   private status = new Map<string, McpServerStatus>()
 
-  constructor(private file: string, private tools: ToolRegistry) {}
+  constructor(private db: Db, private tools: ToolRegistry) {}
 
-  async load() {
-    if (existsSync(this.file)) {
-      this.config = McpConfigSchema.parse(JSON.parse(await readFile(this.file, "utf8")))
+  /** Đọc cấu hình; `connect: false` chỉ nạp trạng thái (test, CLI không cần MCP). */
+  async load(opts: { connect?: boolean } = {}) {
+    const rows = this.db.sql.prepare("SELECT id, config FROM mcp_servers ORDER BY id").all() as Array<{ id: string; config: string }>
+    const servers: McpConfig["servers"] = {}
+    for (const r of rows) {
+      const parsed = ServerSchema.safeParse(JSON.parse(r.config))
+      if (parsed.success) servers[r.id] = parsed.data
     }
-    for (const id of Object.keys(this.config.servers)) this.status.set(id, this.fresh(id))
-    await Promise.allSettled(Object.keys(this.config.servers).map((id) => this.connect(id)))
+    this.config = { servers }
+    for (const id of Object.keys(servers)) this.status.set(id, this.fresh(id))
+    if (opts.connect !== false) await Promise.allSettled(Object.keys(servers).map((id) => this.connect(id)))
     return this
   }
 
@@ -61,9 +64,15 @@ export class McpManager {
     return { id, config, state: config.enabled === false ? "disabled" : "connecting", tools: [] }
   }
 
-  private async save() {
-    await mkdir(dirname(this.file), { recursive: true })
-    await writeFile(this.file, JSON.stringify(this.config, null, 2), "utf8")
+  private save(id: string) {
+    const cfg = this.config.servers[id]
+    if (cfg) this.db.sql.prepare("INSERT INTO mcp_servers(id, config) VALUES(?, ?) ON CONFLICT(id) DO UPDATE SET config = excluded.config").run(id, JSON.stringify(cfg))
+    else this.db.sql.prepare("DELETE FROM mcp_servers WHERE id = ?").run(id)
+  }
+
+  /** Cấu hình đã lưu (không cần kết nối). */
+  saved(id: string) {
+    return this.config.servers[id]
   }
 
   list(): McpServerStatus[] {
@@ -78,7 +87,7 @@ export class McpManager {
     const slug = id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "")
     if (!slug) throw new Error("mcp: invalid server id")
     this.config.servers[slug] = ServerSchema.parse(cfg)
-    await this.save()
+    this.save(slug)
     this.disconnect(slug)
     this.status.set(slug, this.fresh(slug))
     await this.connect(slug)
@@ -89,14 +98,14 @@ export class McpManager {
     this.disconnect(id)
     delete this.config.servers[id]
     this.status.delete(id)
-    await this.save()
+    this.save(id)
   }
 
   async setEnabled(id: string, enabled: boolean) {
     const cfg = this.config.servers[id]
     if (!cfg) throw new Error(`mcp: unknown server ${id}`)
     cfg.enabled = enabled
-    await this.save()
+    this.save(id)
     this.disconnect(id)
     this.status.set(id, this.fresh(id))
     if (enabled) await this.connect(id)
