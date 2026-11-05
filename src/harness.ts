@@ -21,6 +21,7 @@ import { estimateMessage } from "./context/budget.ts"
 import { AskGate, type AskHandler } from "./permission/ask.ts"
 import { inherit, type Ruleset } from "./permission/ruleset.ts"
 import type { ProviderRegistry } from "./provider/registry.ts"
+import type { ProviderClient } from "./provider/types.ts"
 import type { ToolRegistry } from "./tool/registry.ts"
 import { makeAsk } from "./tool/execute.ts"
 import type { Tool } from "./tool/define.ts"
@@ -43,6 +44,8 @@ export interface HarnessConfig {
   maxConcurrentSubagents?: number
   maxDepth?: number
   compaction?: CompactionConfig
+  /** Dự phòng cấp công ty, thử sau danh sách `model` của agent. */
+  fallbackModels?: string[]
 }
 
 interface Live {
@@ -69,6 +72,13 @@ interface Live {
   lastError?: string
   /** Tool riêng cho session (vd delegate bind vào parent). */
   extraTools: Tool[]
+  /** Model đang dùng nếu đã chuyển sang dự phòng (chỉ trong bộ nhớ; restart thì thử lại model chính). */
+  activeModel?: string
+  /**
+   * Phiên con: người giao việc. `waiting` = nhân viên đã hỏi (`ask_lead`) và đang chờ trả lời;
+   * lượt kế tiếp kết thúc thì báo cáo lại lên phiên cha (spawn ban đầu đã trả kết quả rồi).
+   */
+  lead?: { parentID: string; wakeParent: boolean; waiting?: boolean }
 }
 
 export class Harness {
@@ -110,6 +120,8 @@ export class Harness {
     live.compaction = state.compactions.at(-1)
     // System vừa dựng lại từ workspace hiện tại → không cần báo gì cho tới khi tài liệu đổi tiếp.
     live.knownCheckpoint = live.compaction?.id
+    // Nhân viên đang chờ câu trả lời lúc restart: trả lời xong vẫn phải báo lại người giao việc.
+    if (state.session.parentID) live.lead = { parentID: state.session.parentID, wakeParent: true, waiting: pendingQuestion(live.messages) !== undefined }
     const repaired = await repairDangling({ sessionID, messages: live.messages, store: this.store })
     live.estimate.estimated += fromCheckpoint(live.messages, live.compaction).reduce((n, m) => n + estimateMessage(m), 0)
     if (state.staleClaim || repaired > 0) {
@@ -223,13 +235,20 @@ export class Harness {
       askGate: this.askGate,
       harness: this,
     }
-    const { tools } = this.cfg.tools.snapshot(live.ruleset)
-    const resolved = this.cfg.providers.resolve(live.session.model)
+    // `ask_lead` chỉ có nghĩa khi có người giao việc. Không lọc bằng rule deny: phiên con thừa kế mọi deny của cha.
+    const tools = this.cfg.tools.snapshot(live.ruleset).tools.filter((t) => t.name !== "ask_lead" || !!live.session.parentID)
+    const [resolved, ...fallbacks] = this.modelChain(live)
+    if (!resolved) {
+      live.lastError = `no usable model for ${live.session.model}`
+      return Promise.resolve({ tag: "failed", error: new Error(live.lastError) })
+    }
     const ctx: TurnContext = {
       sessionID: live.session.id,
       agent: live.agent,
       model: resolved.model,
-      provider: resolved.client,
+      provider: resolved.provider,
+      fallbacks,
+      onModelSwitch: (ref) => (live.activeModel = ref),
       system: live.system,
       tools: [...tools, ...live.extraTools],
       toolContext: { ...toolContextBase, ask: makeAsk({ ...toolContextBase, signal: live.abort.signal }, live.saved) },
@@ -256,6 +275,7 @@ export class Harness {
         live.running = undefined
         if (outcome.tag === "failed") live.lastError = outcome.error.message
         if (live.inbox.size > 0) return this.wake(live)
+        if (live.lead?.waiting) this.reportToLead(live, outcome)
         this.cfg.events.onTurnEnd?.(live.session.id, outcome)
         return outcome
       })
@@ -274,10 +294,31 @@ export class Harness {
   }
 
   /** Đổi provider/model sau khi CEO sửa cấu hình; phiên đang sống giữ model cũ cho đến khi tạo phiên mới. */
-  reconfigure(opts: { providers?: ProviderRegistry; defaultModel?: string; compaction?: CompactionConfig }) {
+  reconfigure(opts: { providers?: ProviderRegistry; defaultModel?: string; compaction?: CompactionConfig; fallbackModels?: string[] }) {
     if (opts.providers) this.cfg.providers = opts.providers
     if (opts.defaultModel) this.cfg.defaultModel = opts.defaultModel
     if ("compaction" in opts) this.cfg.compaction = opts.compaction
+    if ("fallbackModels" in opts) this.cfg.fallbackModels = opts.fallbackModels
+  }
+
+  /**
+   * Thứ tự thử model: model của phiên → các model còn lại của agent → `fallbackModels` công ty →
+   * model mặc định. Đã chuyển sang dự phòng thì bắt đầu từ model đó (không thử lại model hỏng mỗi lượt).
+   * Ref không resolve được (provider đã xoá) thì bỏ qua kèm notice.
+   */
+  private modelChain(live: Live): Array<{ ref: string; provider: ProviderClient; model: string }> {
+    const refs = [...new Set([live.session.model, ...live.agent.model, ...(this.cfg.fallbackModels ?? []), this.cfg.defaultModel].map((r) => r?.trim()).filter(Boolean) as string[])]
+    const start = live.activeModel ? Math.max(0, refs.indexOf(live.activeModel)) : 0
+    const out: Array<{ ref: string; provider: ProviderClient; model: string }> = []
+    for (const ref of refs.slice(start)) {
+      try {
+        const r = this.cfg.providers.resolve(ref)
+        if (!out.some((o) => o.provider === r.client && o.model === r.model)) out.push({ ref, provider: r.client, model: r.model })
+      } catch (e) {
+        if (ref === live.session.model) this.cfg.events.onNotice?.(live.session.id, `model ${ref} unavailable: ${(e as Error).message}`)
+      }
+    }
+    return out
   }
 
   /** `compaction.model` cấu hình sai không được làm hỏng lượt chat: báo và dùng model của phiên. */
@@ -318,6 +359,7 @@ export class Harness {
       ruleset: childRules,
       depth: parent.depth + 1,
     })
+    child.lead = { parentID, wakeParent: opts.wakeParent !== false }
     const context = opts.context ?? agentDef.context
     const forked = context === "fork" ? forkContext(parent) : ""
     child.inbox.push("queue", {
@@ -335,7 +377,11 @@ export class Harness {
     const link = !opts.background ? opts.signal : undefined
     this.activeSubagents++
     const run = this.wake(child)
-      .then((outcome) => this.result(child, outcome))
+      .then((outcome) => {
+        const entry = this.result(child, outcome)
+        if (entry.status === "needs_input") child.lead!.waiting = true
+        return entry
+      })
       .finally(() => {
         this.activeSubagents--
         link?.removeEventListener("abort", stopChild)
@@ -361,7 +407,21 @@ export class Harness {
     return run
   }
 
+  /** Nhân viên đã được trả lời và làm xong lượt tiếp theo → gửi kết quả mới lên người giao việc. */
+  private reportToLead(child: Live, outcome: Outcome) {
+    const lead = child.lead!
+    lead.waiting = false
+    if (!this.live.has(lead.parentID)) return
+    const parent = this.get(lead.parentID)
+    const entry = this.result(child, outcome)
+    if (entry.status === "needs_input") lead.waiting = true
+    parent.inbox.push("queue", { id: id("msg"), role: "user", source: "subagent", from: child.agent.id, createdAt: Date.now(), parts: [{ type: "text", text: renderResult(entry) }] })
+    this.cfg.events.onNotice?.(parent.session.id, `subagent ${child.session.id} reported (${entry.status})`)
+    if (!parent.running && lead.wakeParent) void this.wake(parent)
+  }
+
   private result(child: Live, outcome: Outcome): ResultEntry {
+    const asked = outcome.tag === "completed" ? pendingQuestion(child.messages) : undefined
     const last = [...child.messages].reverse().find((m) => m.role === "assistant" && m.parts.some((p) => p.type === "text"))
     const summary = last?.parts.filter((p) => p.type === "text").map((p) => p.text).join("") ?? ""
     const files = new Set<string>()
@@ -370,9 +430,9 @@ export class Harness {
     return {
       sessionID: child.session.id,
       agent: child.agent.id,
-      status: outcome.tag === "completed" ? "completed" : outcome.tag === "interrupted" ? "stopped" : "failed",
-      exitReason: outcome.tag === "failed" ? `error: ${outcome.error.message}` : outcome.tag,
-      summary: summary.slice(0, 8000),
+      status: asked ? "needs_input" : outcome.tag === "completed" ? "completed" : outcome.tag === "interrupted" ? "stopped" : "failed",
+      exitReason: asked ? "needs_input" : outcome.tag === "failed" ? `error: ${outcome.error.message}` : outcome.tag,
+      summary: (asked ?? summary).slice(0, 8000),
       filesTouched: [...files].filter(Boolean),
       usage: { steps, inputTokens: child.estimate.measured, outputTokens: child.messages.reduce((n, m) => (m.role === "assistant" ? n + estimateMessage(m) : n), 0) },
     }
@@ -405,7 +465,8 @@ export interface Brief {
 export interface ResultEntry {
   sessionID: string
   agent: string
-  status: "completed" | "failed" | "stopped"
+  /** `needs_input`: nhân viên hỏi ngược (`ask_lead`), đang chờ câu trả lời qua `delegate steer`. */
+  status: "completed" | "failed" | "stopped" | "needs_input"
   exitReason: string
   summary: string
   filesTouched: string[]
@@ -418,7 +479,29 @@ export function renderBrief(b: Brief) {
 
 export function renderResult(r: ResultEntry) {
   const files = r.filesTouched.length ? `\nfiles: ${r.filesTouched.join(", ")}` : ""
-  return `<subagent sessionID="${r.sessionID}" agent="${r.agent}" status="${r.status}" steps="${r.usage.steps}">\n${r.summary || "(no summary)"}${files}\n</subagent>`
+  const ask =
+    r.status === "needs_input"
+      ? `\n\n${r.agent} is waiting for your answer. Reply with delegate(action: "steer", sessionID: "${r.sessionID}", message: …); if only the CEO can decide, ask them first. Their next report arrives as a message.`
+      : ""
+  return `<subagent sessionID="${r.sessionID}" agent="${r.agent}" status="${r.status}" steps="${r.usage.steps}">\n${r.summary || "(no summary)"}${files}${ask}\n</subagent>`
+}
+
+/** Lượt cuối của nhân viên kết thúc bằng `ask_lead` → nội dung câu hỏi (để báo lên người giao việc). */
+function pendingQuestion(messages: Message[]): string | undefined {
+  const last = messages.at(-1)
+  if (last?.role !== "assistant") return undefined
+  const call = [...last.parts].reverse().find((p) => p.type === "tool-call" && p.name === "ask_lead")
+  if (!call || call.type !== "tool-call") return undefined
+  const ok = last.parts.some((p) => p.type === "tool-result" && p.callID === call.callID && !p.isError)
+  if (!ok) return undefined
+  const a = (call.args ?? {}) as { question?: string; options?: string[]; progress?: string }
+  return [
+    `Question: ${a.question ?? "(none)"}`,
+    a.options?.length ? `Options: ${a.options.map((o) => `"${o}"`).join(", ")}` : "",
+    a.progress ? `Progress so far: ${a.progress}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
 }
 
 /** Fork: summary compaction gần nhất (nếu có) + 20 message gần nhất, cap ~30k token. */

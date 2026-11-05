@@ -87,6 +87,20 @@ export function Settings() {
               <input type="text" value={config.defaultModel ?? ""} placeholder="openai/gpt-4.1" onChange={(e) => setConfig({ ...config, defaultModel: e.target.value || undefined })} />
             </label>
             {view.env.HAHANESS_MODEL && <div className="small muted">Biến môi trường HAHANESS_MODEL={view.env.HAHANESS_MODEL} đang ghi đè giá trị này.</div>}
+            <label className="field">
+              Model dự phòng: dùng khi model chính lỗi hẳn (hết lượt thử lại, quota, key sai). Mỗi dòng một model, thử theo thứ tự.
+              <textarea
+                rows={2}
+                className="mono"
+                value={(config.fallbackModels ?? []).join("\n")}
+                placeholder="anthropic/claude-sonnet-4-5"
+                onChange={(e) => {
+                  const list = e.target.value.split("\n").map((s) => s.trim())
+                  setConfig({ ...config, fallbackModels: list.some(Boolean) ? list : undefined })
+                }}
+                onBlur={() => setConfig({ ...config, fallbackModels: config.fallbackModels?.filter(Boolean).length ? config.fallbackModels.filter(Boolean) : undefined })}
+              />
+            </label>
             <div className="row">
               <button className="btn" onClick={runTest} disabled={test.state === "running" || !!dirty}>
                 {test.state === "running" ? "Đang gọi model…" : "Gọi thử"}
@@ -137,8 +151,12 @@ function ProviderCard({ id, p, onChange, onRename, onRemove }: { id: string; p: 
       <div className="row between">
         <div className="row">
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} onBlur={() => onRename(name.trim())} style={{ width: 180 }} className="mono" />
-          <select value={p.type} onChange={(e) => onChange(e.target.value === "openai" ? { type: "openai" } : { type: "custom", module: "./examples/providers/echo.ts" })}>
+          <select
+            value={p.type}
+            onChange={(e) => onChange(e.target.value === "openai" || e.target.value === "anthropic" ? { type: e.target.value } : { type: "custom", module: "./examples/providers/echo.ts" })}
+          >
             <option value="openai">OpenAI-compatible</option>
+            <option value="anthropic">Anthropic (Claude)</option>
             <option value="custom">Custom module</option>
           </select>
         </div>
@@ -146,19 +164,26 @@ function ProviderCard({ id, p, onChange, onRename, onRemove }: { id: string; p: 
           Xóa
         </button>
       </div>
-      {p.type === "openai" ? (
+      {p.type === "openai" || p.type === "anthropic" ? (
         <>
           <label className="field">
-            Base URL (bỏ trống = api.openai.com; điền URL của OpenRouter, Groq, Ollama, LM Studio…)
-            <input type="url" value={p.baseURL ?? ""} placeholder="https://api.openai.com/v1" onChange={(e) => onChange({ ...p, baseURL: e.target.value || undefined })} />
+            {p.type === "openai"
+              ? "Base URL (bỏ trống = api.openai.com; điền URL của OpenRouter, Groq, Ollama, LM Studio…)"
+              : "Base URL (bỏ trống = api.anthropic.com)"}
+            <input
+              type="url"
+              value={p.baseURL ?? ""}
+              placeholder={p.type === "openai" ? "https://api.openai.com/v1" : "https://api.anthropic.com"}
+              onChange={(e) => onChange({ ...p, baseURL: e.target.value || undefined })}
+            />
           </label>
           <label className="field">
-            API key — dán nguyên key (vd <code>sk-…</code>). Đã lưu thì hiện <code>••••</code>; dán key mới để thay.
+            API key — dán nguyên key (vd <code>{p.type === "openai" ? "sk-…" : "sk-ant-…"}</code>). Đã lưu thì hiện <code>••••</code>; dán key mới để thay.
             <input
               type="text"
               className="mono"
               value={p.apiKey ?? ""}
-              placeholder="sk-…"
+              placeholder={p.type === "openai" ? "sk-…" : "sk-ant-…"}
               autoComplete="off"
               spellCheck={false}
               onFocus={(e) => p.apiKey === "••••" && e.target.select()}

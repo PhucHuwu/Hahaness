@@ -148,7 +148,7 @@ function toChatMessages(messages: Message[]): ChatMessage[] {
   return out
 }
 
-async function* sse(body: ReadableStream<Uint8Array>, signal: AbortSignal): AsyncIterable<string> {
+export async function* sse(body: ReadableStream<Uint8Array>, signal: AbortSignal): AsyncIterable<string> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buf = ""

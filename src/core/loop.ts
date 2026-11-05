@@ -56,6 +56,9 @@ export interface TurnContext {
   summarizer?: { provider: ProviderClient; model: string }
   /** false → bỏ pha memory flush trước compaction. */
   memoryFlush?: boolean
+  /** Model dự phòng theo thứ tự; dùng khi model hiện tại lỗi hẳn (hết retry hoặc lỗi không retry được). Bị tiêu thụ dần. */
+  fallbacks?: Array<{ ref: string; provider: ProviderClient; model: string }>
+  onModelSwitch?(ref: string): void
   saveOutput?: (callID: string, output: string) => string
   events: LoopEvents
   signal: AbortSignal
@@ -65,6 +68,9 @@ const MAX_OUTPUT_LIMIT_STREAK = 3
 const MAX_RETRIES = 5
 /** Provider bảo chờ lâu hơn mức này (vd hết quota theo ngày) → báo lỗi luôn thay vì treo lượt. */
 const MAX_RETRY_DELAY = 60_000
+
+/** Lỗi do provider/model (không phải do agent): đáng thử model dự phòng. */
+export class ProviderError extends Error {}
 
 export const INTERRUPTED_TOOL_OUTPUT = "interrupted: the turn stopped before this tool finished. Its effect is unknown; check before repeating it."
 
@@ -77,6 +83,16 @@ export async function runTurn(ctx: TurnContext): Promise<Outcome> {
   let retries = 0
   const guard = new DoomGuard()
   const compaction: CompactionState = { overflow: 0, step: -2 }
+  const switchModel = (error: Error) => {
+    const next = ctx.fallbacks?.shift()
+    if (!next) return false
+    ctx.events.onNotice?.(ctx.sessionID, `model ${ctx.model} failed (${error.message.slice(0, 200)}); switching to ${next.ref}`)
+    ctx.provider = next.provider
+    ctx.model = next.model
+    ctx.onModelSwitch?.(next.ref)
+    retries = 0
+    return true
+  }
   try {
     while (true) {
       if (ctx.signal.aborted) return { tag: "interrupted" }
@@ -102,12 +118,24 @@ export async function runTurn(ctx: TurnContext): Promise<Outcome> {
           if (++outputLimitStreak >= MAX_OUTPUT_LIMIT_STREAK) return { tag: "failed", error: new Error("output limit reached repeatedly") }
           await appendNotice(ctx, "[harness] Your previous reply was cut off by the output limit. Continue from where you stopped.")
           continue
-        case "retry":
-          if (++retries > MAX_RETRIES) return { tag: "failed", error: new Error(`provider: ${outcome.reason}`) }
-          if (outcome.delay > MAX_RETRY_DELAY) return { tag: "failed", error: new Error(`provider asked to wait ${Math.ceil(outcome.delay / 1000)}s: ${outcome.reason}`) }
+        case "retry": {
+          const giveUp =
+            ++retries > MAX_RETRIES
+              ? new ProviderError(`provider: ${outcome.reason}`)
+              : outcome.delay > MAX_RETRY_DELAY
+                ? new ProviderError(`provider asked to wait ${Math.ceil(outcome.delay / 1000)}s: ${outcome.reason}`)
+                : undefined
+          if (giveUp) {
+            if (switchModel(giveUp)) continue
+            return { tag: "failed", error: giveUp }
+          }
           ctx.events.onNotice?.(ctx.sessionID, `retry in ${outcome.delay}ms: ${outcome.reason}`)
           await sleep(outcome.delay, ctx.signal)
           continue
+        }
+        case "failed":
+          if (outcome.error instanceof ProviderError && switchModel(outcome.error)) continue
+          return outcome
         default:
           return outcome
       }
@@ -152,7 +180,7 @@ async function runStep(ctx: TurnContext, step: number, guard: DoomGuard, retryCo
   let persisted = false
   let text = ""
   const toolRuns: Array<Promise<Part>> = []
-  const serialChain = { p: Promise.resolve() }
+  const serialChain: { p: Promise<void>; endTurn?: boolean } = { p: Promise.resolve() }
   let finish: Extract<StreamEvent, { type: "finish" }> | undefined
 
   const persist = async () => {
@@ -206,7 +234,7 @@ async function runStep(ctx: TurnContext, step: number, guard: DoomGuard, retryCo
     }
     return ev.retryable
       ? { tag: "retry", delay: ev.retryAfterMs ?? Math.min(8000, 1000 * 2 ** Math.min(3, retryCount)), reason: ev.error.message }
-      : { tag: "failed", error: ev.error }
+      : { tag: "failed", error: new ProviderError(ev.error.message, { cause: ev.error }) }
   }
   if (text) await addPart({ type: "text", text })
 
@@ -231,6 +259,8 @@ async function runStep(ctx: TurnContext, step: number, guard: DoomGuard, retryCo
   }
 
   if (!persisted) await persist()
+  // Tool yêu cầu dừng lượt (vd `ask_lead`: chờ câu trả lời từ người giao việc) → không gọi model thêm.
+  if (serialChain.endTurn) return { tag: "completed", text: "" }
   if (toolRuns.length) return { tag: "continue" }
   if (finish?.reason === "length") return { tag: "output-limit" }
   return { tag: "completed", text: assistant.parts.filter((p) => p.type === "text").map((p) => p.text).join("") }
@@ -261,12 +291,13 @@ async function runStep(ctx: TurnContext, step: number, guard: DoomGuard, retryCo
   }
 }
 
-function launchTool(ctx: TurnContext, ev: Extract<StreamEvent, { type: "tool-call" }>, serial: { p: Promise<void> }): Promise<Part> {
+function launchTool(ctx: TurnContext, ev: Extract<StreamEvent, { type: "tool-call" }>, serial: { p: Promise<void>; endTurn?: boolean }): Promise<Part> {
   const tool = ctx.tools.find((t) => t.name === ev.name)
   const run = async (): Promise<Part> => {
     if (!tool) return { type: "tool-result", callID: ev.callID, name: ev.name, output: `Unknown tool: ${ev.name}`, isError: true }
     ctx.events.onToolStart?.(ctx.sessionID, ev.name, ev.args, ev.callID)
     const result = await executeTool(tool, ev.args, { ...ctx.toolContext, signal: ctx.signal }, { saveOutput: ctx.saveOutput, callID: ev.callID })
+    if (result.metadata?.endTurn === true && !result.isError) serial.endTurn = true
     ctx.events.onToolEnd?.(ctx.sessionID, ev.name, result.output, result.isError ?? false, ev.callID)
     return { type: "tool-result", callID: ev.callID, name: ev.name, output: result.output, isError: result.isError ?? false }
   }

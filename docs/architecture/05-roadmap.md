@@ -31,9 +31,10 @@
 - [x] Tài liệu đổi giữa phiên (COMPANY/USER/MEMORY/knowledge/skills) → `<workspace-update>` qua message, system giữ nguyên, không báo lại thay đổi của chính agent — xem `03-context-engineering.md`
 - [ ] Memory flush trước compaction; daily notes
 - [ ] Workspace file đổi giữa phiên → inject diff
-- [ ] Provider Anthropic; fallback theo list `agent.model`
+- [x] Provider Anthropic (`type: "anthropic"`, prompt cache, SSE) — xem `06-providers.md`
+- [x] Model dự phòng: `agent.model[]` + `fallbackModels` công ty, đổi khi hết retry / lỗi không retry được — xem `01-agent-loop.md`
 - [ ] `websearch` qua provider có key (Tavily/Brave) khi cấu hình
-- [ ] Nhân viên hỏi ngược: `status: needs_input` → CTO hỏi CEO
+- [x] Nhân viên hỏi ngược: tool `ask_lead` → `status: needs_input` → CTO trả lời bằng `delegate steer` (hoặc hỏi CEO trước) — xem `04-multi-agent.md`
 - [ ] Upload file nhị phân (PDF/DOCX) vào tri thức + trích text
 - [ ] Tìm kiếm FTS khi `node:sqlite` có FTS5 (hiện lọc trong JS)
 

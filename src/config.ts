@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
 import { OpenAIProvider } from "./provider/openai.ts"
+import { AnthropicProvider } from "./provider/anthropic.ts"
 import { ProviderRegistry } from "./provider/registry.ts"
 import type { ProviderClient } from "./provider/types.ts"
 import type { Db } from "./core/db.ts"
@@ -38,6 +39,13 @@ const ProviderSchema = z.discriminatedUnion("type", [
     models: z.record(z.string(), ModelInfoSchema).optional(),
   }),
   z.object({
+    type: z.literal("anthropic"),
+    baseURL: z.string().trim().optional(),
+    apiKey: z.string().optional().transform(normalizeApiKey).describe('Literal or "{env:VAR_NAME}"; default ANTHROPIC_API_KEY'),
+    headers: z.record(z.string(), z.string()).optional(),
+    models: z.record(z.string(), ModelInfoSchema).optional(),
+  }),
+  z.object({
     type: z.literal("custom"),
     module: z.string().describe("Path to a .ts/.js module exporting default (options) => ProviderClient"),
     options: z.record(z.string(), z.unknown()).optional(),
@@ -46,6 +54,8 @@ const ProviderSchema = z.discriminatedUnion("type", [
 
 export const ConfigSchema = z.object({
   defaultModel: z.string().optional(),
+  /** Thử lần lượt khi model của phiên lỗi hẳn (hết retry, lỗi không retry được). */
+  fallbackModels: z.array(z.string()).optional(),
   providers: z.record(z.string(), ProviderSchema).default({}),
   compaction: z
     .object({
@@ -92,6 +102,7 @@ export async function loadConfig(cwd: string, db?: Db): Promise<{ config: Config
   return {
     config: {
       defaultModel: local?.defaultModel ?? base?.defaultModel,
+      fallbackModels: local?.fallbackModels ?? base?.fallbackModels,
       providers: { ...base?.providers, ...local?.providers },
       compaction: base?.compaction || local?.compaction ? { ...base?.compaction, ...local?.compaction } : undefined,
     },
@@ -109,20 +120,24 @@ export function saveConfig(db: Db, config: Config) {
 }
 
 export async function buildProvider(id: string, cfg: ProviderConfig, cwd: string): Promise<ProviderClient> {
-  switch (cfg.type) {
-    case "openai": {
-      const envName = /^\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(cfg.apiKey ?? "")?.[1]
-      const apiKey = cfg.apiKey ? expandEnv(cfg.apiKey)! : (process.env.OPENAI_API_KEY ?? "")
-      if (!apiKey) {
-        throw new Error(
-          envName
-            ? `provider "${id}": biến môi trường ${envName} chưa được đặt. Dán API key trực tiếp vào ô API key trong Cài đặt.`
-            : `provider "${id}": chưa có API key. Dán API key vào Cài đặt.`,
-        )
-      }
-      const headers = Object.fromEntries(Object.entries(cfg.headers ?? {}).map(([k, v]) => [k, expandEnv(v) ?? ""]))
-      return new OpenAIProvider({ apiKey, baseURL: cfg.baseURL, headers, models: cfg.models })
+  const keyAndHeaders = (cfg: { apiKey?: string; headers?: Record<string, string> }, envDefault: string) => {
+    const envName = /^\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(cfg.apiKey ?? "")?.[1]
+    const apiKey = cfg.apiKey ? expandEnv(cfg.apiKey)! : (process.env[envDefault] ?? "")
+    if (!apiKey) {
+      throw new Error(
+        envName
+          ? `provider "${id}": biến môi trường ${envName} chưa được đặt. Dán API key trực tiếp vào ô API key trong Cài đặt.`
+          : `provider "${id}": chưa có API key. Dán API key vào Cài đặt.`,
+      )
     }
+    const headers = Object.fromEntries(Object.entries(cfg.headers ?? {}).map(([k, v]) => [k, expandEnv(v) ?? ""]))
+    return { apiKey, headers }
+  }
+  switch (cfg.type) {
+    case "openai":
+      return new OpenAIProvider({ ...keyAndHeaders(cfg, "OPENAI_API_KEY"), baseURL: cfg.baseURL, models: cfg.models })
+    case "anthropic":
+      return new AnthropicProvider({ ...keyAndHeaders(cfg, "ANTHROPIC_API_KEY"), baseURL: cfg.baseURL, models: cfg.models })
     case "custom": {
       const path = isAbsolute(cfg.module) ? cfg.module : resolve(cwd, cfg.module)
       if (!existsSync(path)) throw new Error(`provider "${id}": module not found: ${path}`)
@@ -147,7 +162,11 @@ export async function buildProviders(config: Config, cwd: string): Promise<Provi
   const entries = Object.entries(config.providers)
   if (entries.length === 0) {
     const apiKey = process.env.OPENAI_API_KEY ?? process.env.HAHANESS_API_KEY
-    if (!apiKey) throw new Error("No providers configured. Add one in Settings, or set OPENAI_API_KEY.")
+    if (!apiKey && process.env.ANTHROPIC_API_KEY) {
+      registry.register("anthropic", new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY }), { default: true })
+      return registry
+    }
+    if (!apiKey) throw new Error("No providers configured. Add one in Settings, or set OPENAI_API_KEY / ANTHROPIC_API_KEY.")
     registry.register("openai", new OpenAIProvider({ apiKey, baseURL: process.env.OPENAI_BASE_URL }), { default: true })
     return registry
   }

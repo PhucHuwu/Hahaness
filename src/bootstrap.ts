@@ -17,6 +17,7 @@ import { todo } from "./tool/builtin/todo.ts"
 import { memory } from "./tool/builtin/memory.ts"
 import { question, type QuestionHandler } from "./tool/builtin/question.ts"
 import { delegate } from "./tool/builtin/delegate.ts"
+import { askLead } from "./tool/builtin/ask-lead.ts"
 import { hire } from "./tool/builtin/hire.ts"
 import { skill } from "./tool/builtin/skill.ts"
 import { knowledgeTool, manageSkillTool, mcpTool, staffTool } from "./tool/builtin/manage.ts"
@@ -87,6 +88,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
     memory(docs),
     question(opts.questionHandler),
     delegate(agents),
+    askLead,
     hire(agents),
     skill(skills),
     knowledgeTool(docs),
@@ -106,6 +108,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
     tools,
     skills,
     compaction: config.compaction,
+    fallbackModels: config.fallbackModels,
     permissions: [{ action: "*", resource: "*", effect: "allow" }],
     askHandler: opts.askHandler,
     events: opts.events,

@@ -12,7 +12,7 @@ export function delegate(agents: AgentRegistry) {
 Actions:
 - list: show current staff with their roles. Call this first if unsure who to use.
 - spawn: give an employee a task. background=true returns immediately and the result arrives later as a message; use it to run several employees in parallel.
-- steer: send feedback or a follow-up to a running employee (sessionID + message).
+- steer: send feedback or a follow-up to an employee (sessionID + message). Also how you answer an employee whose report has status="needs_input".
 - stop: cancel a running employee.
 
 If no employee fits, use \`hire\` first.`,
@@ -61,7 +61,11 @@ If no employee fits, use \`hire\` first.`,
         }
         case "steer": {
           if (!input.sessionID || !input.message) return { output: "steer requires sessionID and message", isError: true }
-          if (!harness.has(input.sessionID)) return { output: `No live session ${input.sessionID}`, isError: true }
+          if (!harness.has(input.sessionID)) {
+            // Sau restart nhân viên đang chờ câu trả lời không còn trong bộ nhớ → nạp lại.
+            const ok = await harness.resume(input.sessionID).then(() => true, () => false)
+            if (!ok) return { output: `No session ${input.sessionID}`, isError: true }
+          }
           void harness.send(input.sessionID, input.message, "steer", ctx.agent)
           return { output: `Message sent to ${input.sessionID}` }
         }

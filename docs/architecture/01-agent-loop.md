@@ -89,7 +89,12 @@ async function runTurn(session, signal) {
 - `usage.inputTokens = 0` (proxy không trả usage) → **không** reset `measured`; cộng dồn ước lượng chars/4. Trước đây reset về 0 khiến compaction không bao giờ kích hoạt.
 - Dừng CTO khi đang chờ nhân viên (`delegate` foreground) → signal của tool call lan xuống `spawn`, nhân viên bị abort theo. Nhân viên chạy nền không bị dừng theo (dừng bằng `delegate stop` hoặc nút Dừng ở phiên của họ).
 - Provider báo context quá dài → `compaction.recoverOverflow()` thử shrink `[0.85, 0.7, 0.5]` → `compacted`.
-- Provider fallback: `agent.model` là list; hết retry với model đầu → đổi sang model tiếp theo (học hermes `fallback_providers`).
+- **Model dự phòng** (`Harness.modelChain` + `TurnContext.fallbacks`):
+  - Thứ tự: model của phiên → phần còn lại của `agent.model` → `fallbackModels` trong config công ty → `defaultModel`. Trùng lặp và ref không resolve được thì bị bỏ.
+  - Đổi model khi: (a) hết 5 lần retry; (b) provider bảo chờ quá 60s; (c) lỗi không retry được từ provider (401/403/400, model không tồn tại). Các lỗi này mang class `ProviderError`. Lỗi do agent gây ra (doom loop, output limit, overflow không nén được) **không** đổi model.
+  - Lượt hiện tại chạy tiếp trên model mới, từ đúng step lỗi; transcript không đổi. Có notice `model X failed (…); switching to Y`.
+  - `Live.activeModel` nhớ model đang dùng: các lượt sau bắt đầu từ model đó, không thử lại model hỏng mỗi lượt. Chỉ lưu trong bộ nhớ: restart thì thử lại model chính. `session.model` giữ nguyên (đó là lựa chọn ban đầu).
+  - System prompt không đổi khi đổi model (cache của provider mới bắt đầu lại, chấp nhận được).
 
 ### Durability
 

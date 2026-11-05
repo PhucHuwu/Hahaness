@@ -40,7 +40,7 @@ export function adminRoutes(r: Router, app: App) {
     providerError: app.providerError ?? null,
     providers: app.harness.cfg.providers.ids(),
     defaultModel: app.harness.cfg.defaultModel,
-    env: { OPENAI_API_KEY: !!process.env.OPENAI_API_KEY, HAHANESS_MODEL: process.env.HAHANESS_MODEL ?? null },
+    env: { OPENAI_API_KEY: !!process.env.OPENAI_API_KEY, ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY, HAHANESS_MODEL: process.env.HAHANESS_MODEL ?? null },
   }))
 
   r.put("/api/config", async (req) => {
@@ -50,7 +50,7 @@ export function adminRoutes(r: Router, app: App) {
     saveConfig(db, next)
     try {
       const providers = await buildProviders(next, app.cwd)
-      app.harness.reconfigure({ providers, defaultModel: process.env.HAHANESS_MODEL ?? next.defaultModel, compaction: next.compaction })
+      app.harness.reconfigure({ providers, defaultModel: process.env.HAHANESS_MODEL ?? next.defaultModel, compaction: next.compaction, fallbackModels: next.fallbackModels })
       app.providerError = undefined
     } catch (e) {
       app.providerError = (e as Error).message
@@ -203,7 +203,7 @@ function redact<T extends { providers: Record<string, any> }>(config: T): T {
   const providers = Object.fromEntries(
     Object.entries(config.providers).map(([id, p]) => [
       id,
-      p.type === "openai" && p.apiKey && !p.apiKey.startsWith("{env:") ? { ...p, apiKey: SECRET } : p,
+      (p.type === "openai" || p.type === "anthropic") && p.apiKey && !p.apiKey.startsWith("{env:") ? { ...p, apiKey: SECRET } : p,
     ]),
   )
   return { ...config, providers }
@@ -214,7 +214,7 @@ function restoreSecrets<T extends { providers: Record<string, any> }>(next: T, c
   const providers = Object.fromEntries(
     Object.entries(next.providers).map(([id, p]) => {
       const old = current.providers[id]
-      if (p.type === "openai" && p.apiKey === SECRET) return [id, { ...p, apiKey: old?.type === "openai" ? old.apiKey : undefined }]
+      if (p.apiKey === SECRET) return [id, { ...p, apiKey: old?.type === p.type ? old.apiKey : undefined }]
       return [id, p]
     }),
   )

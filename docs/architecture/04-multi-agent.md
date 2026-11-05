@@ -74,7 +74,7 @@ spawn ─▶ child session (parentID, agent, model, ruleset = inherit(parent, ch
 ### ResultEntry — thứ duy nhất qua biên
 
 ```ts
-{ sessionID, agent, status: "completed"|"failed"|"stopped", exitReason, summary (≤8k), filesTouched, usage }
+{ sessionID, agent, status: "completed"|"failed"|"stopped"|"needs_input", exitReason, summary (≤8k), filesTouched, usage }
 ```
 
 Render cho CTO:
@@ -85,6 +85,17 @@ Render cho CTO:
 files: drafts/welcome-email.md
 </subagent>
 ```
+
+### Nhân viên hỏi ngược: tool `ask_lead` → `status: "needs_input"`
+
+Nhân viên thiếu thông tin hoặc gặp quyết định không phải của mình thì gọi `ask_lead({ question, options?, progress? })`.
+
+- Tool **không chờ câu trả lời trong tool call**. Người giao việc có thể đang chờ chính nhân viên đó (`delegate` foreground), nên chờ sẽ deadlock. Thay vào đó tool trả `metadata.endTurn`, và loop kết thúc lượt ngay sau batch tool hiện tại mà không gọi model thêm.
+- `Harness.result` thấy lượt cuối kết thúc bằng `ask_lead` thành công → `ResultEntry.status = "needs_input"`, `summary` là câu hỏi, lựa chọn và tiến độ. Kết quả này về CTO như mọi báo cáo khác: tool result nếu foreground, message `source: "subagent"` nếu background. Bản render có thêm câu nhắc trả lời bằng `delegate steer`.
+- CTO trả lời bằng `delegate(steer, sessionID, message)`. Nếu chỉ CEO quyết được, CTO hỏi CEO bằng `question` trước. `steer` tự `resume` phiên nhân viên nếu server đã restart.
+- Phiên nhân viên giữ `lead = { parentID, wakeParent, waiting }`. Khi lượt sau câu trả lời kết thúc, `reportToLead` gửi `ResultEntry` mới lên phiên cha và đánh thức nó, theo cùng quy tắc `wakeParent` như lúc spawn. Nhân viên có thể hỏi tiếp, khi đó lại là `needs_input`.
+- `ask_lead` chỉ hiện với phiên có `parentID`. Lọc trong `wake`, không lọc bằng rule deny, vì phiên con thừa kế mọi deny của cha. CEO chat thẳng với nhân viên thì đã có `question`.
+- Comms hiện báo cáo này với nhãn "hỏi lại".
 
 ### Isolation của nhân viên
 

@@ -28,6 +28,8 @@ import { memory } from "./tool/builtin/memory.ts"
 import { fitForSummary, isOverflow, prune } from "./context/compaction.ts"
 import type { Message } from "./core/types.ts"
 import { updateNotice } from "./context/instructions.ts"
+import { askLead } from "./tool/builtin/ask-lead.ts"
+import { AnthropicProvider, requestBody, toAnthropicMessages } from "./provider/anthropic.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -82,6 +84,7 @@ async function setup(provider: ProviderClient) {
     docs,
     skills,
     agents,
+    tools,
     cleanup: async () => {
       db.close()
       await rm(dir, { recursive: true, force: true })
@@ -944,4 +947,171 @@ test("workspace update helpers: line diff for long docs, removal notice, nothing
   assert.ok(notice.length < 1_000, "diff, not the whole document")
   assert.match(updateNotice([src(long)], [])!, /removed or emptied/)
   assert.equal(updateNotice([src(long)], [src(long)]), undefined)
+})
+
+// ---- Nhân viên hỏi ngược (needs_input) ------------------------------------------
+
+test("ask_lead: employee asks, CTO gets status=needs_input, answers via steer, then gets the final report", async () => {
+  const childTurns: string[] = []
+  const requests: ModelRequest[] = []
+  const provider: ProviderClient = {
+    info: () => ({ id: "mock", contextWindow: 100_000, maxOutput: 8_000 }),
+    async *stream(req) {
+      requests.push(req)
+      const isChild = allText(req).includes("<brief>")
+      const last = req.messages.at(-1)!
+      const lastText = last.parts.map((p) => (p.type === "text" ? p.text : p.type === "tool-result" ? p.output : "")).join("")
+      if (isChild) {
+        childTurns.push(lastText)
+        assert.ok(req.tools.some((t) => t.name === "ask_lead"), "employee has ask_lead")
+        if (lastText.includes("<brief>")) {
+          yield { type: "tool-call", callID: "q1", name: "ask_lead", args: { question: "Which city?", options: ["Hanoi", "Saigon"], progress: "outline done" } }
+          yield finish("tool-calls")
+          return
+        }
+        assert.match(lastText, /Saigon/)
+        yield { type: "text-delta", text: "report for Saigon" }
+        yield finish()
+        return
+      }
+      assert.ok(!req.tools.some((t) => t.name === "ask_lead"), "CTO (no lead) does not get ask_lead")
+      if (lastText.includes("do research")) {
+        yield { type: "tool-call", callID: "d1", name: "delegate", args: { action: "spawn", agent: "researcher", brief: { goal: "g", context: "c", done_when: "d" } } }
+        yield finish("tool-calls")
+        return
+      }
+      const asked = /<subagent sessionID="(ses_\w+)"[^>]*status="needs_input"[\s\S]*Which city\?[\s\S]*Hanoi/.exec(lastText)
+      if (asked) {
+        yield { type: "tool-call", callID: "s1", name: "delegate", args: { action: "steer", sessionID: asked[1], message: "Saigon" } }
+        yield finish("tool-calls")
+        return
+      }
+      yield { type: "text-delta", text: "ok" }
+      yield finish()
+    },
+  }
+  const { harness, tools, cleanup } = await setup(provider)
+  tools.register(askLead)
+  try {
+    const main = await harness.createSession({ agent: "cto" })
+    await harness.send(main.session.id, "do research")
+    const child = harness.list().find((l) => l.session.parentID === main.session.id)!
+    for (let i = 0; i < 300; i++) {
+      const done = childTurns.length >= 2 && !child.running && !main.running && main.messages.some((m) => m.source === "subagent")
+      if (done) break
+      await new Promise((r) => setTimeout(r, 10))
+    }
+    await main.running
+    assert.equal(childTurns.length, 2, "employee stopped after asking, then resumed with the answer")
+    const reports = main.messages.flatMap((m) => m.parts.flatMap((p) => (p.type === "text" && m.source === "subagent" ? [p.text] : [])))
+    assert.equal(reports.length, 1)
+    assert.match(reports[0]!, /status="completed"[\s\S]*report for Saigon/)
+  } finally {
+    await cleanup()
+  }
+})
+
+// ---- Model dự phòng ------------------------------------------------------------
+
+test("fallback: non-retryable error on the main model switches to the next model for this and later turns", async () => {
+  const bad = scripted([() => [{ type: "error", error: new Error("401 invalid key"), retryable: false }]])
+  const good = scripted([])
+  const { harness, agents, cleanup } = await setup(bad)
+  try {
+    const notices: string[] = []
+    const h = new Harness({
+      ...harness.cfg,
+      agents,
+      providers: new ProviderRegistry().register("mock", bad).register("backup", good),
+      fallbackModels: ["backup/b1"],
+      events: { onNotice: (_, t) => notices.push(t) },
+    })
+    const s = await h.createSession({ agent: "cto" })
+    const outcome = await h.send(s.session.id, "hi")
+    assert.equal(outcome.tag, "completed")
+    assert.equal(good.requests[0]!.model, "b1")
+    assert.ok(notices.some((n) => /switching to backup\/b1/.test(n)))
+    await h.send(s.session.id, "again")
+    assert.equal(bad.requests.length, 1, "broken model not retried every turn")
+    assert.equal(good.requests.length, 2)
+  } finally {
+    await cleanup()
+  }
+})
+
+test("fallback: no fallback configured → the original error is reported", async () => {
+  const bad = scripted([() => [{ type: "error", error: new Error("400 model not found"), retryable: false }]])
+  const { harness, cleanup } = await setup(bad)
+  try {
+    const s = await harness.createSession({ agent: "cto" })
+    const outcome = await harness.send(s.session.id, "hi")
+    assert.equal(outcome.tag, "failed")
+    assert.match(outcome.tag === "failed" ? outcome.error.message : "", /model not found/)
+  } finally {
+    await cleanup()
+  }
+})
+
+// ---- Anthropic provider ----------------------------------------------------------
+
+test("anthropic: request mapping (system cache, tool_use/tool_result pairing) and SSE parsing", async () => {
+  const messages: Message[] = [
+    { id: "1", role: "user", createdAt: 0, parts: [{ type: "text", text: "hi" }] },
+    { id: "2", role: "user", source: "system", createdAt: 0, parts: [{ type: "text", text: "<workspace-update>x</workspace-update>" }] },
+    { id: "3", role: "assistant", createdAt: 0, parts: [{ type: "text", text: "let me check" }, { type: "tool-call", callID: "t1", name: "read", args: { path: "a.md" } }, { type: "tool-result", callID: "t1", name: "read", output: "content", isError: false }] },
+    { id: "4", role: "user", createdAt: 0, parts: [{ type: "text", text: "and?" }] },
+  ]
+  const mapped = toAnthropicMessages(messages)
+  assert.deepEqual(mapped.map((m) => m.role), ["user", "assistant", "user"], "roles alternate; system notice merged into user")
+  assert.equal(mapped[0]!.content.length, 2)
+  assert.deepEqual(mapped[1]!.content[1], { type: "tool_use", id: "t1", name: "read", input: { path: "a.md" } })
+  assert.equal(mapped[2]!.content[0]!.type, "tool_result", "tool_result first in the following user message")
+
+  const body = requestBody({ model: "claude-x", system: ["A", "B"], messages, tools: [{ name: "read", description: "r", parameters: { type: "object" } }] }, 8000) as any
+  assert.deepEqual(body.system.at(-1).cache_control, { type: "ephemeral" })
+  assert.deepEqual(body.tools[0].cache_control, { type: "ephemeral" })
+  assert.equal(body.max_tokens, 8000)
+
+  const events = [
+    { type: "message_start", message: { usage: { input_tokens: 10, cache_read_input_tokens: 90, output_tokens: 1 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "tu1", name: "read", input: {} } },
+    { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"path":' } },
+    { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '"b.md"}' } },
+    { type: "content_block_stop", index: 1 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 42 } },
+    { type: "message_stop" },
+  ]
+  const sseBody = events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join("")
+  const realFetch = globalThis.fetch
+  let sent: any
+  globalThis.fetch = (async (url: string, init: RequestInit) => {
+    sent = { url, headers: init.headers, body: JSON.parse(String(init.body)) }
+    return new Response(sseBody, { status: 200, headers: { "content-type": "text/event-stream" } })
+  }) as unknown as typeof fetch
+  try {
+    const p = new AnthropicProvider({ apiKey: "k", baseURL: "https://example.test/v1" })
+    const out: StreamEvent[] = []
+    for await (const ev of p.stream({ model: "claude-x", system: ["S"], messages: messages.slice(0, 1), tools: [] }, new AbortController().signal)) out.push(ev)
+    assert.equal(sent.url, "https://example.test/v1/messages")
+    assert.equal(sent.headers["x-api-key"], "k")
+    assert.deepEqual(out[0], { type: "text-delta", text: "Hello" })
+    assert.deepEqual(out[1], { type: "tool-call", callID: "tu1", name: "read", args: { path: "b.md" } })
+    assert.deepEqual(out[2], { type: "finish", reason: "tool-calls", usage: { inputTokens: 100, outputTokens: 42, cacheReadTokens: 90 } })
+
+    globalThis.fetch = (async () => new Response(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "prompt is too long: 210000 tokens > 200000 maximum" } }), { status: 400 })) as unknown as typeof fetch
+    const errs: StreamEvent[] = []
+    for await (const ev of p.stream({ model: "claude-x", system: [], messages: messages.slice(0, 1), tools: [] }, new AbortController().signal)) errs.push(ev)
+    assert.ok(errs[0]!.type === "error" && isOverflow(errs[0]!.error.message) && !errs[0]!.retryable)
+
+    globalThis.fetch = (async () => new Response("overloaded", { status: 529, headers: { "retry-after": "2" } })) as unknown as typeof fetch
+    const busy: StreamEvent[] = []
+    for await (const ev of p.stream({ model: "claude-x", system: [], messages: messages.slice(0, 1), tools: [] }, new AbortController().signal)) busy.push(ev)
+    assert.ok(busy[0]!.type === "error" && busy[0]!.retryable && busy[0]!.retryAfterMs === 2000)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+  assert.equal(ConfigSchema.parse({ providers: { a: { type: "anthropic", apiKey: "sk-ant-x" } } }).providers.a!.type, "anthropic")
 })

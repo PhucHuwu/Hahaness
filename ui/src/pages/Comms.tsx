@@ -63,7 +63,9 @@ export function Comms({ agentName }: { agentName: (id: string) => string }) {
               <span className="muted"> → </span>
               <strong>{name(i.to)}</strong>
               <span className="muted"> · {KIND[i.kind]} · {new Date(i.at).toLocaleString()}</span>
-              {i.status && <span className={`badge ${i.status === "completed" ? "ok" : "err"}`}>{i.status}</span>}
+              {i.status && (
+                <span className={`badge ${i.status === "completed" ? "ok" : i.status === "needs_input" ? "" : "err"}`}>{i.status === "needs_input" ? "hỏi lại" : i.status}</span>
+              )}
               <a href={`#chat/${i.sessionID}`} className="grow-right small">
                 Mở phiên
               </a>

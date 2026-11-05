@@ -96,10 +96,12 @@ export interface Question {
 
 export type ProviderConfig =
   | { type: "openai"; baseURL?: string; apiKey?: string; headers?: Record<string, string>; models?: Record<string, { contextWindow?: number; maxOutput?: number }> }
+  | { type: "anthropic"; baseURL?: string; apiKey?: string; headers?: Record<string, string>; models?: Record<string, { contextWindow?: number; maxOutput?: number }> }
   | { type: "custom"; module: string; options?: Record<string, unknown> }
 
 export interface Config {
   defaultModel?: string
+  fallbackModels?: string[]
   providers: Record<string, ProviderConfig>
 }
 
@@ -110,7 +112,7 @@ export interface ConfigView {
   providerError: string | null
   providers: string[]
   defaultModel: string
-  env: { OPENAI_API_KEY: boolean; HAHANESS_MODEL: string | null }
+  env: { OPENAI_API_KEY: boolean; ANTHROPIC_API_KEY?: boolean; HAHANESS_MODEL: string | null }
 }
 
 export interface DocView {
