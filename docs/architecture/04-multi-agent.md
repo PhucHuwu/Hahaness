@@ -1,146 +1,119 @@
-# 04 — Multi-agent: CEO / CTO / workers
+# 04 — Multi-agent: CEO / CTO / nhân viên
 
-## Agent definition
+## Định nghĩa một vai
 
-`agents/<id>.md` (user) hoặc `src/agent/builtin/<id>.md`:
+`src/agent/builtin/<id>.md` (có sẵn) hoặc `staff/<id>.md` trong workspace (CTO tuyển, hoặc CEO/ai đó viết tay):
 
 ```md
 ---
-id: coder
-name: Coder
-description: Sửa code, viết test, chạy test. Nhận brief rõ ràng về file và tiêu chí xong.
+id: writer
+name: Writer
+description: Writes long-form content in the company's voice.   # CTO đọc dòng này khi chọn người
 mode: subagent            # primary | subagent | all
-model: [anthropic/claude-sonnet-4.5, openai/gpt-5]   # list = fallback
-steps: 60
-context: isolated         # isolated | fork (mặc định khi được spawn)
+model: [openai/gpt-4.1]   # tùy chọn, list = fallback
+steps: 30
+context: isolated         # isolated | fork
 permissions:
-  - { action: read,  resource: "*", effect: allow }
-  - { action: edit,  resource: "*", effect: allow }
-  - { action: write, resource: "*", effect: allow }
-  - { action: shell, resource: "*", effect: ask }
-  - { action: shell, resource: "bun test*", effect: allow }
-  - { action: shell, resource: "git push*", effect: deny }
-  - { action: delegate, resource: "*", effect: deny }
+  - { action: read,  resource: "*",        effect: allow }
+  - { action: write, resource: "drafts/*", effect: allow }
+  - { action: webfetch, resource: "*",     effect: allow }
 ---
-Bạn là kỹ sư phần mềm… (system prompt)
+Bạn là … (job description = system prompt)
 ```
 
-Merge thứ tự: builtin → `agents/*.md` → config JSON. Permissions append (last-match-wins).
+Merge: builtin → `staff/` → config. Cùng id thì sau thắng, permissions nối thêm.
 
-## Builtin agents
+## Vai có sẵn
 
-| id | mode | context | Vai trò | Tool chính |
+| id | mode | context | Làm gì | Tool |
 |---|---|---|---|---|
-| `cto` | primary | — | Nói chuyện với CEO; lập kế hoạch, chia việc, tổng hợp, quyết định | `delegate`, `todo`, `question`, `read`, `grep`, `memory` |
-| `planner` | subagent | fork | Phân rã yêu cầu lớn thành task list có dependency | `read`, `glob`, `grep` |
-| `researcher` | subagent | isolated | Đọc codebase/web, trả báo cáo có trích dẫn path | `read`, `glob`, `grep`, `webfetch` |
-| `coder` | subagent | isolated | Sửa code, chạy test | `read`, `edit`, `write`, `shell` |
-| `reviewer` | subagent | fork | Đọc diff + lịch sử, trả nhận xét theo mức độ | `read`, `shell(git diff*)` |
-| `ops` | subagent | isolated | build/deploy/script, permission `ask` mặc định | `shell`, `read` |
+| `cto` | primary | — | Nói chuyện với CEO; lập kế hoạch, tuyển, giao việc, duyệt, lưu deliverable, ghi memory | `delegate`, `hire`, `memory`, `todo`, `question`, `read`, `list`, `write`, `webfetch` |
+| `researcher` | subagent | isolated | Sự thật, đối thủ, số liệu, nguồn | `read`, `webfetch`, `websearch` |
+| `writer` | subagent | isolated | Bài viết, email, script | `read`, `write(drafts/*)`, `webfetch` |
+| `marketer` | subagent | isolated | Chiến dịch, định vị, copy | `read`, `write(drafts/*)`, `webfetch` |
+| `analyst` | subagent | fork | Phản biện deliverable theo ý CEO thật sự | `read` |
 
-CTO mặc định có `delegate` allow cho mọi subagent; worker mặc định `delegate: deny` (leaf). Để worker được delegate tiếp, set `role: orchestrator` + depth cap `delegate.maxDepth = 2`.
+## Tuyển nhân viên: tool `hire`
 
-## Tool `delegate`
+CTO gọi khi không ai hợp việc. Đây là **việc bình thường**, system prompt CTO nói rõ.
 
 ```ts
-input: z.object({
-  action: z.enum(["spawn", "steer", "stop", "list", "wait"]),
-  agent: z.string().optional(),
-  brief: z.object({
-    goal: z.string(),
-    context: z.string(),
-    done_when: z.string(),
-    output: z.string().default("report"),
-  }).optional(),
-  context: z.enum(["isolated", "fork"]).optional(),
-  background: z.boolean().default(false),
-  sessionID: z.string().optional(),     // steer / stop / wait / follow-up spawn
-  message: z.string().optional(),       // steer
+hire({ id, name, description, system, capabilities: ("read"|"write"|"webfetch"|"websearch")[] })
+```
+
+- Harness dịch `capabilities` thành ruleset cố định. CTO **không** tự viết permission — tránh việc model cấp quyền quá tay.
+- Luôn cứng: `write` chỉ `drafts/*`; `delegate`, `hire`, `memory`, `question` = deny.
+- Ghi `staff/<id>.md` ngay → tồn tại qua các phiên; CEO mở ra sửa job description bằng tay được.
+- Không được ghi đè vai `primary`. Trùng id → báo lỗi cho model, gợi ý dùng `delegate`.
+- `id` được slug hóa.
+
+## Giao việc: tool `delegate`
+
+```ts
+delegate({
+  action: "list" | "spawn" | "steer" | "stop",
+  agent?, brief?: { goal, context, done_when, output },
+  context?: "isolated" | "fork", background?, sessionID?, message?
 })
 ```
 
-Description của tool liệt kê các agent CTO được phép dùng (từ ruleset) — tính một lần khi session bắt đầu để deterministic.
+- `list` trả staff hiện có + assignment của phiên này. CTO được dặn gọi trước khi chọn người.
+- `spawn` với agent không tồn tại → lỗi gợi ý `list`/`hire` (không throw).
+- Description tool không liệt kê staff cứng (vì staff thay đổi khi `hire` → vỡ cache); thay bằng `list`.
 
 ### Lifecycle
 
 ```
-spawn ─▶ child session created (parentID, agent, model, context)
-      ─▶ inbox(child).push(queue, brief)
-      ─▶ runTurn(child) trên lane riêng (giới hạn maxConcurrentSubagents = 4)
-      │
-      ├─ foreground: parent await; trả ResultEntry trong tool result
-      │
-      └─ background: tool result trả ngay `{sessionID, status: "running"}`
-                     khi child xong → inbox(parent).push(queue, SubagentResultMessage)
-                     → parent wake nếu đang idle, hoặc thấy ở turn tiếp theo
+spawn ─▶ child session (parentID, agent, model, ruleset = inherit(parent, child ∪ hard-deny))
+      ─▶ inbox(child).push(queue, "You are an employee…" + [fork context] + <brief>)
+      ─▶ runTurn(child)   giới hạn maxConcurrentSubagents = 4
+      ├─ foreground: CTO chờ, nhận ResultEntry trong tool result
+      └─ background: trả "đang làm" ngay; xong → inbox(CTO).push(queue, <subagent …/>) → wake CTO nếu idle
 ```
 
-### ResultEntry — thứ duy nhất đi qua biên
+### ResultEntry — thứ duy nhất qua biên
 
 ```ts
-interface ResultEntry {
-  sessionID: string
-  agent: string
-  status: "completed" | "failed" | "stopped" | "timeout"
-  exitReason: string               // "done" | "max_steps" | "error:<msg>" | "interrupted"
-  summary: string                  // assistant text cuối, cap 8k chars
-  filesTouched: string[]           // từ metadata tool write/edit
-  schemaValid?: boolean            // nếu output: json:<schema>
-  usage: { steps: number; inputTokens: number; outputTokens: number }
-}
+{ sessionID, agent, status: "completed"|"failed"|"stopped", exitReason, summary (≤8k), filesTouched, usage }
 ```
 
-Render vào parent:
+Render cho CTO:
 
 ```xml
-<subagent sessionID="ses_x" agent="coder" status="completed" steps="14">
-…summary…
+<subagent sessionID="ses_x" agent="writer" status="completed" steps="6">
+…báo cáo cuối của nhân viên…
+files: drafts/welcome-email.md
 </subagent>
 ```
 
-Không bao giờ đưa transcript child vào parent. CEO muốn xem thì mở session child trong UI.
+### Isolation của nhân viên
 
-### Steer / stop / wait
+- Hard deny (không config được): `question` (không hỏi CEO trực tiếp), `memory`, `hire`, `delegate` nếu `role: leaf`.
+- Ruleset = `inherit(parent, child)`: parent deny → child không bao giờ allow.
+- System context: Tier A của chính họ + `COMPANY.md`; **không** có `USER.md`/`MEMORY.md` (không cần biết sếp thích gì, và giảm rò rỉ).
+- `context: fork` (analyst): thêm summary compaction gần nhất của CTO + 20 message gần nhất, cap 30k token.
 
-- `steer(sessionID, message)` → `inbox(child).push(steer, message)`. Child thấy nó sau tool batch hiện tại.
-- `stop(sessionID)` → `abort("parent")` child; child trả `status: stopped`.
-- `wait(sessionID | "*")` → block tới khi child (hoặc tất cả) xong; dùng khi CTO đã spawn nhiều background.
-- Follow-up: `spawn` với `sessionID` có sẵn → push brief mới vào child cũ (giữ context của nó).
+## Cách CTO làm việc (system prompt)
 
-### Isolation rules cho child
+1. Mơ hồ thật sự → hỏi **một** câu kèm lựa chọn. Không thì tự quyết và nói rõ.
+2. `delegate(list)` → không ai hợp → `hire` → `delegate(spawn)`.
+3. Việc độc lập chạy `background: true` song song.
+4. Nhận bài → đối chiếu với brief → chưa đạt thì `steer` với feedback cụ thể, không đẩy bài yếu lên CEO.
+5. Xong → `write deliverables/<name>.md` → báo path.
+6. Ghi `memory` sự thật lâu dài về công ty/CEO.
+7. Báo cáo kiểu executive: kết quả, quyết định đã làm, cần gì từ CEO. Không transcript.
 
-- Hard deny (không config được): `question` (không hỏi CEO trực tiếp — trả về `status: needs_input` để CTO hỏi), `memory` write (chỉ CTO ghi memory), `delegate` nếu leaf.
-- Child kế thừa ruleset của parent **giao** với ruleset của chính nó: parent `deny` thì child không bao giờ `allow`.
-- `ask` trong child khi chạy background → forward lên CEO qua parent session UI (có nhãn agent); nếu CEO không trả lời trong `askTimeout` (10 phút) → `deny`.
-- Child `cwd` = parent cwd, hoặc `worktree: true` → git worktree riêng (v1.1).
+## CEO
 
-## CEO giao tiếp
-
-### Orchestrated mode (mặc định)
-CEO gõ tự nhiên. CTO quyết định tự làm hay delegate. CTO được hướng dẫn trong system prompt:
-
-- Việc < 3 bước và trong khả năng tool của mình → tự làm.
-- Việc cần đọc nhiều file / tìm hiểu → `researcher` (background nếu có việc khác song song).
-- Việc sửa code → `coder` với brief có `done_when` kiểm tra được (test pass, lệnh chạy ok).
-- Sau `coder` xong và thay đổi > 50 dòng → `reviewer` (fork) trước khi báo CEO.
-- Luôn tổng hợp cho CEO ở mức quyết định, không lặp lại chi tiết worker.
-
-### Direct mode
-- `@coder sửa bug X ở file Y` → harness tạo brief tối thiểu `{goal: "...", context: "(CEO direct)", done_when: "theo goal"}` và spawn foreground, kết quả in thẳng ra CEO. Session cha vẫn là session CTO hiện tại nên CTO thấy ResultEntry ở turn sau.
-- `/agent coder` → chuyển session hiện tại sang nói thẳng với coder (coder lúc này chạy `mode: primary` tạm thời, vẫn chịu permission của nó).
-- `/sessions` liệt kê child đang chạy; `/steer <id> <msg>`, `/stop <id>`.
+- Mặc định gõ tự nhiên với CTO.
+- `@writer <task>` → brief tối thiểu, spawn foreground từ session CTO, in thẳng kết quả.
+- `/staff` xem nhân viên + assignment đang chạy.
 
 ## Giới hạn
 
-| Tham số | Mặc định |
+| | mặc định |
 |---|---|
-| `delegate.maxDepth` | 1 (CTO → worker) |
+| `delegate.maxDepth` | 1 |
 | `delegate.maxConcurrent` | 4 |
-| `delegate.childSteps` | 60 |
-| `delegate.timeout` | 30 phút |
-| `delegate.askTimeout` | 10 phút |
-| `delegate.summaryCap` | 8.000 chars |
-
-## Trạng thái hiển thị cho CTO
-
-Thay vì inject block "Active Subagents" vào system (openclaw) — vỡ cache — ta để `delegate(action: "list")` cho CTO tự hỏi, và compaction summary có mục `## Active Subagents`.
+| nhân viên `steps` | 30 (hire) / theo file |
+| `summaryCap` | 8.000 chars |

@@ -8,10 +8,11 @@
    ├─ harness guidance  : tool usage rules, output style (~500 tokens, generic)
    └─ skills index      : <available_skills> id/name/description
 
-[system part 2]  Tier B — PROJECT (ổn định trong session)
-   ├─ instructions      : AGENTS.md (root + ancestors), config.instructions[]
-   ├─ environment       : <env> cwd, platform, git branch, date (ngày — không giờ)
-   └─ workspace memory  : MEMORY.md, USER.md (snapshot lúc bắt đầu session)
+[system part 2]  Tier B — COMPANY (ổn định trong session)
+   ├─ <company>         : COMPANY.md — mọi vai đều thấy
+   ├─ <ceo>             : USER.md    — chỉ primary (CTO)
+   ├─ <memory>          : MEMORY.md  — chỉ primary, snapshot lúc bắt đầu session
+   └─ <env>             : cwd, platform, date (ngày — không giờ)
 
 [messages]
    ├─ <conversation-checkpoint> summary + recent-context   (nếu đã compaction)
@@ -25,12 +26,19 @@
 
 Lý do: cả 3 harness đều hội tụ về "prefix bất biến, biến động đi qua message". Hermes đóng băng system prompt hoàn toàn; opencode inject diff; openclaw tách suffix động. Ta chọn: **system đóng băng trong session, mọi thay đổi qua message**.
 
-## Instruction discovery (`context/instructions.ts`)
+## Workspace của công ty (`context/workspace.ts`)
 
-- Tìm `AGENTS.md` từ cwd lên tới project root (git root) — thứ tự root → leaf, mỗi file render `Instructions from: <relpath>\n<content>`.
-- Cap mỗi file 20k chars, tổng 60k (học openclaw). Vượt → cắt + ghi chú.
-- Mỗi source hash SHA-256 canonical. Lưu baseline vào session. Trước mỗi step so hash; đổi → push steer message chứa **unified diff**, không rewrite system.
-- `AGENTS.md` trong thư mục con mà model vừa `read`/`edit` file → inject hint (học hermes `subdirectory_hints`), cap 32k tổng.
+Người dùng no-code "dạy" công ty bằng 2 file markdown, harness tự tạo template lần đầu chạy:
+
+| File | Ai thấy | Nội dung | Cap |
+|---|---|---|---|
+| `COMPANY.md` | mọi vai | công ty làm gì, sản phẩm, khách hàng, giọng văn | 20k chars |
+| `USER.md` | CTO | CEO là ai, muốn báo cáo thế nào, ghét gì | 20k |
+| `MEMORY.md` | CTO | CTO tự ghi qua tool `memory`, mục ngăn bằng `§` | 4k, bỏ cũ nhất khi đầy |
+
+- Nhân viên không thấy `USER.md`/`MEMORY.md`: họ không cần biết sếp, và giảm rò rỉ sở thích cá nhân vào bài viết.
+- Mỗi source hash SHA-256, baseline lưu theo session. Đổi giữa phiên → (v0.2) push steer message chứa diff, không rewrite system.
+- Bỏ hẳn AGENTS.md discovery theo thư mục — đó là khái niệm của coding agent.
 
 ## Token budget (`context/budget.ts`)
 
@@ -97,15 +105,13 @@ Provider trả "context too long" dù estimate chưa tới ceiling → re-anchor
 ### Precompute (v1.1)
 Khi `total >= ceiling − 40k`, chạy summarize nền (không block). Nếu tới ceiling mà bản precompute chưa quá 5 phút và không có message mới quá nhiều → dùng luôn.
 
-## Memory (`context/memory.ts`)
+## Memory (`tool/builtin/memory.ts` + `context/workspace.ts`)
 
 Nhỏ và đọc được, học hermes + openclaw:
 
-- `workspace/MEMORY.md` — cap 4.000 chars, mục ngăn bằng `§`. Tool `memory` với `add | patch | remove`.
-- `workspace/USER.md` — cap 2.000 chars, sở thích/profile CEO.
-- `workspace/memory/YYYY-MM-DD.md` — daily notes, model append tự do, chỉ load ngày hôm nay + hôm qua khi session mới.
-- `session_search(query)` (v1.1) — FTS trên JSONL store của các session cũ.
-- Snapshot MEMORY/USER vào system khi session bắt đầu; sửa giữa session → chỉ hiện ở session sau (đổi lại là cache ổn định). Tool `memory` trả về nội dung mới trong tool result nên model vẫn "thấy" ngay.
+- `MEMORY.md` — cap 4.000 chars, mục ngăn bằng `§`. Tool `memory` với `list | add | replace | remove`, chỉ CTO có.
+- Snapshot vào system khi session bắt đầu; sửa giữa session → chỉ hiện ở session sau (đổi lại là cache ổn định). Tool trả về toàn bộ memory sau mỗi lần ghi nên model vẫn "thấy" ngay.
+- v0.2: `memory/YYYY-MM-DD.md` daily notes; memory flush trước compaction; `session_search` FTS trên JSONL cũ.
 
 ## Skills (`context/skills.ts`)
 
@@ -117,8 +123,8 @@ Nhỏ và đọc được, học hermes + openclaw:
 
 | `context` | Child nhận | Dùng cho |
 |---|---|---|
-| `isolated` (mặc định) | Tier A của agent child + Tier B (AGENTS.md, env, **không** MEMORY/USER) + brief | coder, researcher, ops |
-| `fork` | như isolated + `<parent-context>` chứa summary compaction gần nhất của parent (hoặc summary tức thời nếu chưa có) + N message gần nhất, cap 30k tokens | reviewer, planner |
+| `isolated` (mặc định) | Tier A của vai + `<company>` + `<env>` (**không** USER/MEMORY) + brief | researcher, writer, marketer, nhân viên tuyển thêm |
+| `fork` | như isolated + `<parent-summary>` (compaction gần nhất của CTO) + `<parent-recent-context>` 20 message, cap 30k tokens | analyst |
 
 Brief từ CTO phải có cấu trúc (được ép bởi schema của tool `delegate`):
 

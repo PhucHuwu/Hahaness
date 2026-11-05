@@ -1,11 +1,11 @@
 import type { AgentDef } from "../agent/types.ts"
 import type { InstructionSource } from "./instructions.ts"
 
-const HARNESS_GUIDANCE = `# Harness
-- You are running inside Hahaness, a multi-agent harness. The user is the CEO.
-- Use tools to inspect before acting. Prefer parallel tool calls when independent.
+const HARNESS_GUIDANCE = `# Working in Hahaness
+- You are a member of a small company run by the CEO (the user). The company workspace is the working directory: COMPANY.md describes the business, drafts/ holds work in progress, deliverables/ holds finished work.
+- Read the workspace before guessing. Prefer parallel tool calls when independent.
 - Tool outputs may be truncated; the footer tells you where the full output was saved.
-- When finished, reply with a concise result. Do not narrate every step.`
+- Write in the language the CEO uses. Finish with a concise result, not a narration of steps.`
 
 export interface SystemInput {
   agent: AgentDef

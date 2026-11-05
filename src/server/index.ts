@@ -1,0 +1,111 @@
+import { createServer } from "node:http"
+import { join, dirname } from "node:path"
+import { fileURLToPath } from "node:url"
+import { existsSync } from "node:fs"
+import { bootstrap } from "../bootstrap.ts"
+import { id } from "../core/id.ts"
+import { Router, SseBus, json, serveStatic, HttpError } from "./http.ts"
+import { chatRoutes, sessionView } from "./routes-chat.ts"
+import { adminRoutes } from "./routes-admin.ts"
+
+const here = dirname(fileURLToPath(import.meta.url))
+
+export interface ServerOptions {
+  cwd: string
+  port?: number
+  host?: string
+  /** Thư mục build UI (ui/dist). Không có → chỉ API (dùng Vite dev server + proxy). */
+  uiDir?: string
+}
+
+/**
+ * Pending questions: tool `question` (và permission ask) chờ CEO trả lời qua UI.
+ * Hiển thị trong chat của phiên tương ứng; trả lời qua POST /api/questions/:id.
+ */
+interface Pending {
+  id: string
+  sessionID: string
+  kind: "question" | "permission"
+  text: string
+  options?: string[]
+  resolve: (answer: string) => void
+}
+
+export async function startServer(opts: ServerOptions) {
+  const bus = new SseBus()
+  const pending = new Map<string, Pending>()
+
+  const ask = (sessionID: string, kind: Pending["kind"], text: string, options?: string[]) =>
+    new Promise<string>((resolve) => {
+      const q: Pending = { id: id("q"), sessionID, kind, text, options, resolve }
+      pending.set(q.id, q)
+      bus.emit({ type: "question", id: q.id, sessionID, kind, text, options })
+    })
+
+  // Tool `question` không nhận sessionID qua handler; theo dõi phiên đang gọi tool question.
+  let askingSession = ""
+
+  const app = await bootstrap({
+    cwd: opts.cwd,
+    questionHandler: (q, options) => ask(askingSession, "question", q, options),
+    askHandler: async (req) => {
+      const a = await ask(req.sessionID, "permission", `${req.agent} wants to ${req.action} ${req.resource}`, ["Allow", "Deny"])
+      return a.toLowerCase().startsWith("d") ? { kind: "reject" } : { kind: "always" }
+    },
+    events: {
+      onText: (sessionID, delta) => bus.emit({ type: "text", sessionID, delta }),
+      onReasoning: (sessionID, delta) => bus.emit({ type: "reasoning", sessionID, delta }),
+      onToolStart: (sessionID, name, args, callID) => {
+        if (name === "question") askingSession = sessionID
+        bus.emit({ type: "tool-start", sessionID, name, args, callID })
+      },
+      onToolEnd: (sessionID, name, output, isError, callID) => bus.emit({ type: "tool-end", sessionID, name, output: output.slice(0, 4000), isError, callID }),
+      onNotice: (sessionID, text) => bus.emit({ type: "notice", sessionID, text }),
+      onSession: (session) => bus.emit({ type: "session", session: sessionView(app, session) }),
+      onTurnStart: (sessionID) => bus.emit({ type: "turn", sessionID, running: true }),
+      onTurnEnd: (sessionID, outcome) => bus.emit({ type: "turn", sessionID, running: false, outcome: outcome.tag, error: outcome.tag === "failed" ? outcome.error.message : undefined }),
+    },
+  })
+
+  const router = new Router()
+  router.get("/api/health", () => ({ ok: true, cwd: app.cwd, providerError: app.providerError ?? null, clients: bus.size }))
+  router.get("/api/events", (_req, res) => {
+    bus.subscribe(res)
+  })
+  router.get("/api/questions", () => [...pending.values()].map(({ resolve: _r, ...q }) => q))
+  router.post("/api/questions/:id", async (req) => {
+    const q = pending.get(req.params.id!)
+    if (!q) throw new HttpError(404, "question already answered")
+    const body = await req.json<{ answer?: string }>()
+    if (!body.answer?.trim()) throw new HttpError(400, "answer is required")
+    pending.delete(q.id)
+    q.resolve(body.answer)
+    bus.emit({ type: "question-answered", id: q.id, sessionID: q.sessionID })
+    return { ok: true }
+  })
+  chatRoutes(router, app)
+  adminRoutes(router, app)
+
+  const uiDir = opts.uiDir ?? join(here, "..", "..", "ui", "dist")
+  const hasUI = existsSync(join(uiDir, "index.html"))
+
+  const server = createServer(async (req, res) => {
+    if (await router.handle(req, res)) return
+    const url = new URL(req.url ?? "/", "http://localhost")
+    if (url.pathname.startsWith("/api/")) return json(res, 404, { error: `no route ${req.method} ${url.pathname}` })
+    if (hasUI && (await serveStatic(uiDir, url, res))) return
+    json(res, 404, { error: hasUI ? "not found" : "UI not built. Run `npm run ui:build`, or `npm run ui` for the dev server." })
+  })
+
+  const port = opts.port ?? 7331
+  const host = opts.host ?? "127.0.0.1"
+  await new Promise<void>((resolve) => server.listen(port, host, resolve))
+  return { app, server, url: `http://${host}:${port}`, hasUI, close: () => (app.mcp.closeAll(), server.close()) }
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const { url, hasUI, app } = await startServer({ cwd: process.cwd(), port: Number(process.env.PORT ?? 7331) })
+  console.log(`Hahaness server: ${url}${hasUI ? "" : "  (API only — run \`npm run ui\` for the interface)"}`)
+  console.log(`Workspace: ${app.cwd}`)
+  if (app.providerError) console.log(`Provider: ${app.providerError} — configure in Settings.`)
+}

@@ -11,8 +11,17 @@ export class ToolRegistry {
     return this
   }
 
+  unregister(...names: string[]) {
+    for (const n of names) this.tools.delete(n)
+    return this
+  }
+
   get(name: string) {
     return this.tools.get(name)
+  }
+
+  names() {
+    return [...this.tools.keys()]
   }
 
   /** Tool khả dụng cho một ruleset: bỏ tool bị deny toàn bộ để tiết kiệm token. */

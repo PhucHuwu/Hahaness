@@ -1,4 +1,4 @@
-import type { Message, Outcome, Part } from "./types.ts"
+import type { Message, Outcome, Part, Session } from "./types.ts"
 import type { ModelRequest, ProviderClient, StreamEvent } from "../provider/types.ts"
 import type { Tool, ToolContext } from "../tool/define.ts"
 import { executeTool } from "../tool/execute.ts"
@@ -16,9 +16,13 @@ export const REPEATED_TOOL_NOTICE = "[harness] You are repeating the same tool c
 export interface LoopEvents {
   onText?(sessionID: string, delta: string): void
   onReasoning?(sessionID: string, delta: string): void
-  onToolStart?(sessionID: string, name: string, args: unknown): void
-  onToolEnd?(sessionID: string, name: string, output: string, isError: boolean): void
+  onToolStart?(sessionID: string, name: string, args: unknown, callID: string): void
+  onToolEnd?(sessionID: string, name: string, output: string, isError: boolean, callID: string): void
   onNotice?(sessionID: string, text: string): void
+  /** Harness-level: phiên mới được tạo/nạp lại; turn kết thúc (idle). */
+  onSession?(session: Session): void
+  onTurnStart?(sessionID: string): void
+  onTurnEnd?(sessionID: string, outcome: Outcome): void
 }
 
 export interface TurnContext {
@@ -186,9 +190,9 @@ function launchTool(ctx: TurnContext, ev: Extract<StreamEvent, { type: "tool-cal
   const tool = ctx.tools.find((t) => t.name === ev.name)
   const run = async (): Promise<Part> => {
     if (!tool) return { type: "tool-result", callID: ev.callID, name: ev.name, output: `Unknown tool: ${ev.name}`, isError: true }
-    ctx.events.onToolStart?.(ctx.sessionID, ev.name, ev.args)
+    ctx.events.onToolStart?.(ctx.sessionID, ev.name, ev.args, ev.callID)
     const result = await executeTool(tool, ev.args, { ...ctx.toolContext, signal: ctx.signal }, { outputDir: ctx.outputDir, callID: ev.callID })
-    ctx.events.onToolEnd?.(ctx.sessionID, ev.name, result.output, result.isError ?? false)
+    ctx.events.onToolEnd?.(ctx.sessionID, ev.name, result.output, result.isError ?? false, ev.callID)
     return { type: "tool-result", callID: ev.callID, name: ev.name, output: result.output, isError: result.isError ?? false }
   }
   if (tool?.concurrency === "serial") {

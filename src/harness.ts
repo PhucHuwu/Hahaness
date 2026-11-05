@@ -7,7 +7,8 @@ import { runTurn, type LoopEvents, type TurnContext } from "./core/loop.ts"
 import { SessionStore } from "./core/store.ts"
 import type { Compaction, Message, Outcome, Session } from "./core/types.ts"
 import { build as buildSystem } from "./context/system.ts"
-import { discover, environment, type InstructionSource } from "./context/instructions.ts"
+import { environment, type InstructionSource } from "./context/instructions.ts"
+import * as workspace from "./context/workspace.ts"
 import { estimateMessage } from "./context/budget.ts"
 import { AskGate, type AskHandler } from "./permission/ask.ts"
 import { inherit, type Ruleset } from "./permission/ruleset.ts"
@@ -15,6 +16,7 @@ import type { ProviderRegistry } from "./provider/registry.ts"
 import type { ToolRegistry } from "./tool/registry.ts"
 import { makeAsk } from "./tool/execute.ts"
 import type { Tool } from "./tool/define.ts"
+import type { SkillStore } from "./context/skills.ts"
 
 export interface HarnessConfig {
   cwd: string
@@ -24,6 +26,7 @@ export interface HarnessConfig {
   defaultModel: string
   agents: AgentRegistry
   tools: ToolRegistry
+  skills?: SkillStore
   askHandler: AskHandler
   events: LoopEvents
   permissions?: Ruleset
@@ -73,14 +76,35 @@ export class Harness {
       createdAt: Date.now(),
     }
     await this.store.createSession(session)
-    const instructions = [...(await discover(this.cfg.cwd)), environment(this.cfg.cwd)]
+    return this.activate(session, agent, { ruleset: opts.ruleset, depth: opts.depth, extraTools: opts.extraTools })
+  }
+
+  /** Nạp lại phiên từ store (sau khi restart). System prompt được dựng lại từ workspace hiện tại. */
+  async resume(sessionID: string): Promise<Live> {
+    const existing = this.live.get(sessionID)
+    if (existing) return existing
+    const state = await this.store.load(sessionID)
+    if (!state) throw new Error(`no stored session ${sessionID}`)
+    const agent = this.cfg.agents.get(state.session.agent)
+    const live = await this.activate(state.session, agent, {})
+    live.messages.push(...state.messages)
+    live.compaction = state.compactions.at(-1)
+    live.estimate.estimated += state.messages.reduce((n, m) => n + estimateMessage(m), 0)
+    return live
+  }
+
+  private async activate(session: Session, agent: AgentDef, opts: { ruleset?: Ruleset; depth?: number; extraTools?: Tool[] }): Promise<Live> {
+    const instructions = [
+      ...(await workspace.sources(this.cfg.cwd, { includePersonal: agent.mode === "primary" })),
+      environment(this.cfg.cwd),
+    ]
     const live: Live = {
       session,
       agent,
       inbox: new Inbox(),
       messages: [],
       estimate: { measured: 0, estimated: 0 },
-      system: buildSystem({ agent, instructions }),
+      system: buildSystem({ agent, instructions, skillsIndex: await this.cfg.skills?.index() }),
       instructions,
       ruleset: [...(this.cfg.permissions ?? []), ...agent.permissions, ...(opts.ruleset ?? [])],
       saved: new Set(),
@@ -90,6 +114,7 @@ export class Harness {
     }
     live.estimate.estimated = live.system.reduce((n, s) => n + Math.ceil(s.length / 4), 0)
     this.live.set(session.id, live)
+    this.cfg.events.onSession?.(session)
     return live
   }
 
@@ -97,6 +122,10 @@ export class Harness {
     const l = this.live.get(sessionID)
     if (!l) throw new Error(`no live session ${sessionID}`)
     return l
+  }
+
+  has(sessionID: string) {
+    return this.live.has(sessionID)
   }
 
   list() {
@@ -141,17 +170,21 @@ export class Harness {
       events: this.cfg.events,
       signal: live.abort.signal,
     }
+    this.cfg.events.onTurnStart?.(live.session.id)
     live.running = runTurn(ctx)
       .then(async (outcome) => {
         live.estimate = ctx.estimate
         live.compaction = ctx.compactionSummary
         live.running = undefined
         if (live.inbox.size > 0) return this.wake(live)
+        this.cfg.events.onTurnEnd?.(live.session.id, outcome)
         return outcome
       })
       .catch((e) => {
         live.running = undefined
-        return { tag: "failed", error: e as Error } as Outcome
+        const outcome = { tag: "failed", error: e as Error } as Outcome
+        this.cfg.events.onTurnEnd?.(live.session.id, outcome)
+        return outcome
       })
     return live.running
   }
@@ -160,8 +193,18 @@ export class Harness {
     this.get(sessionID).abort.abort("user")
   }
 
-  /** Spawn child session. Trả ResultEntry (foreground) hoặc id (background). */
-  async spawn(parentID: string, opts: { agent: string; brief: Brief; context?: "isolated" | "fork"; background?: boolean; model?: string }) {
+  /** Đổi provider/model sau khi CEO sửa cấu hình; phiên đang sống giữ model cũ cho đến khi tạo phiên mới. */
+  reconfigure(opts: { providers?: ProviderRegistry; defaultModel?: string }) {
+    if (opts.providers) this.cfg.providers = opts.providers
+    if (opts.defaultModel) this.cfg.defaultModel = opts.defaultModel
+  }
+
+  /**
+   * Spawn child session. Trả ResultEntry (foreground) hoặc id (background).
+   * `wakeParent: false` (direct mode từ UI): kết quả vẫn vào inbox CTO nhưng
+   * không đánh thức — CTO thấy ở lượt sau thay vì tự trả lời CEO.
+   */
+  async spawn(parentID: string, opts: { agent: string; brief: Brief; context?: "isolated" | "fork"; background?: boolean; wakeParent?: boolean; model?: string }) {
     const parent = this.get(parentID)
     const maxDepth = this.cfg.maxDepth ?? 1
     if (parent.depth >= maxDepth) throw new Error(`delegate: max depth ${maxDepth} reached`)
@@ -172,6 +215,7 @@ export class Harness {
     const childRules = inherit(parent.ruleset, [
       { action: "question", resource: "*", effect: "deny" },
       { action: "memory", resource: "*", effect: "deny" },
+      { action: "hire", resource: "*", effect: "deny" },
       ...(agentDef.role === "leaf" ? [{ action: "delegate", resource: "*", effect: "deny" } as const] : []),
     ])
     const child = await this.createSession({
@@ -207,7 +251,7 @@ export class Harness {
           parts: [{ type: "text", text: renderResult(entry) }],
         })
         this.cfg.events.onNotice?.(parentID, `subagent ${child.session.id} finished (${entry.status})`)
-        if (!parent.running) void this.wake(parent)
+        if (!parent.running && opts.wakeParent !== false) void this.wake(parent)
       })
       return { sessionID: child.session.id, status: "running" as const }
     }

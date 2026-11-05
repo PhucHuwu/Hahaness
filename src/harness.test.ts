@@ -10,6 +10,8 @@ import { AgentRegistry } from "./agent/registry.ts"
 import { ToolRegistry } from "./tool/registry.ts"
 import { define } from "./tool/define.ts"
 import { delegate } from "./tool/builtin/delegate.ts"
+import { hire } from "./tool/builtin/hire.ts"
+import { existsSync } from "node:fs"
 import type { ModelRequest, ProviderClient, StreamEvent } from "./provider/types.ts"
 import { evaluate, denied } from "./permission/ruleset.ts"
 import { fromMarkdown } from "./agent/registry.ts"
@@ -45,7 +47,8 @@ async function setup(provider: ProviderClient) {
       return { output: `echo:${text}` }
     },
   })
-  const tools = new ToolRegistry().register(echo, delegate(agents.subagents()))
+  agents.persistTo(join(dir, "staff"))
+  const tools = new ToolRegistry().register(echo, delegate(agents), hire(agents))
   const harness = new Harness({
     cwd: dir,
     dataDir: join(dir, ".hahaness"),
@@ -56,8 +59,40 @@ async function setup(provider: ProviderClient) {
     askHandler: async () => ({ kind: "once" }),
     events: {},
   })
-  return { harness, dir, cleanup: () => rm(dir, { recursive: true, force: true }) }
+  return { harness, dir, agents, cleanup: () => rm(dir, { recursive: true, force: true }) }
 }
+
+test("hire: CTO creates a new employee at runtime, persisted, then delegates to them", async () => {
+  const provider = scripted([
+    () => [{ type: "tool-call", callID: "c1", name: "hire", args: { id: "seo-specialist", name: "SEO Specialist", description: "SEO audits", system: "You audit SEO.", capabilities: ["read", "webfetch"] } }, finish("tool-calls")],
+    (req) => {
+      const r = req.messages.at(-1)!.parts.find((p) => p.type === "tool-result")
+      assert.match(r!.output, /Hired SEO Specialist/)
+      return [{ type: "tool-call", callID: "c2", name: "delegate", args: { action: "spawn", agent: "seo-specialist", brief: { goal: "audit", context: "c", done_when: "d" } } }, finish("tool-calls")]
+    },
+    (req) => {
+      assert.match(req.system[0]!, /You audit SEO/)
+      assert.ok(!req.tools.some((t) => t.name === "hire"), "employee must not hire")
+      assert.ok(!req.tools.some((t) => t.name === "delegate"), "employee must not delegate")
+      return [{ type: "text-delta", text: "audit done" }, finish()]
+    },
+    () => [{ type: "text-delta", text: "reported" }, finish()],
+  ])
+  const { harness, dir, agents, cleanup } = await setup(provider)
+  try {
+    const main = await harness.createSession({ agent: "cto" })
+    const outcome = await harness.send(main.session.id, "do an SEO audit")
+    assert.equal(outcome.tag, "completed")
+    assert.ok(agents.has("seo-specialist"))
+    assert.ok(existsSync(join(dir, "staff", "seo-specialist.md")))
+    const reloaded = await new AgentRegistry().load(join(dir, "staff"))
+    assert.equal(reloaded.get("seo-specialist").system, "You audit SEO.")
+    assert.equal(reloaded.get("seo-specialist").permissions.find((r) => r.action === "webfetch")?.effect, "allow")
+    assert.equal(reloaded.get("seo-specialist").permissions.find((r) => r.action === "websearch")?.effect, "deny")
+  } finally {
+    await cleanup()
+  }
+})
 
 test("loop: tool call then completion, persisted before execute", async () => {
   const provider = scripted([

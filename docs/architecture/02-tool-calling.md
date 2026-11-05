@@ -52,8 +52,8 @@ type Rule = { action: string; resource: string; effect: "allow" | "ask" | "deny"
 ```
 
 - Thứ tự merge: `config.permissions` → `agent.permissions` → `session.permissions` (saved "always" của user). Saved rule **không override** rule `deny` có sẵn: check `denied()` trước.
-- Actions chuẩn: `read`, `write`, `edit`, `shell`, `webfetch`, `delegate`, `skill`, `memory`, `mcp:<server>:<tool>`, `external_directory`.
-- `shell` có resource = chuỗi lệnh; pattern `rm -rf *`, `git push*` thường để `ask`/`deny`.
+- Actions chuẩn: `read`, `write`, `webfetch`, `websearch`, `delegate`, `hire`, `memory`, `mcp:<server>:<tool>`.
+- `write` có resource = path → rule `{ write, "drafts/*", allow }` + `{ write, "*", deny }` giới hạn nhân viên.
 - Chế độ unattended (cron/background subagent không có người trả lời): `ask` → `deny`.
 - Tắt tool cho agent = rule `{ action: "<tool>", resource: "*", effect: "deny" }`; registry `snapshot(ruleset)` lọc tool bị `deny *` khỏi definitions luôn (tiết kiệm token).
 
@@ -63,21 +63,28 @@ type Rule = { action: string; resource: string; effect: "allow" | "ask" | "deny"
 - Namespace: MCP tool đặt tên `<server>_<tool>`; description MCP được strip ký tự điều khiển / tag Unicode (chống prompt-injection, học hermes).
 - Tool description có thể **động theo context** (vd `delegate` liệt kê agent được phép) — nhưng phải deterministic trong một session để không vỡ cache.
 
-## Builtin tools v1
+## Builtin tools v0.1
 
-| Tool | Mục đích | Permission action | Concurrency |
+Không có shell, không edit code. Mọi tool file bị chặn trong workspace (`inside()` ném lỗi nếu path thoát ra ngoài).
+
+| Tool | Mục đích | Permission action | Ai có |
 |---|---|---|---|
-| `read` | đọc file có offset/limit | `read` | parallel |
-| `write` | ghi/tạo file | `write` | parallel |
-| `edit` | find/replace exact | `edit` | parallel |
-| `glob` / `grep` | tìm file / nội dung | `read` | parallel |
-| `shell` | chạy lệnh, timeout, tail mode | `shell` | parallel |
-| `question` | hỏi CEO | — | serial |
-| `todo` | plan list cho model | — | parallel |
-| `skill` | load SKILL.md on demand | `skill` | parallel |
-| `memory` | add/patch/remove MEMORY.md | `memory` | serial |
-| `delegate` | spawn/steer/stop subagent | `delegate` | serial (fg) / parallel (bg) |
-| `webfetch` | fetch URL → markdown | `webfetch` | parallel |
+| `read` | đọc tài liệu trong workspace | `read` | mọi vai |
+| `list` | liệt kê thư mục | `read` | mọi vai |
+| `write` | tạo/ghi đè tài liệu | `write` (resource = path, nhân viên chỉ `drafts/*`) | CTO, writer, marketer |
+| `webfetch` | tải trang → text | `webfetch` (resource = hostname) | CTO, researcher, writer, marketer |
+| `websearch` | tìm web (DuckDuckGo HTML, không cần key) | `websearch` | researcher |
+| `question` | hỏi CEO một câu kèm lựa chọn | — (hard deny cho nhân viên) | CTO |
+| `todo` | plan list của phiên | — | mọi vai |
+| `memory` | list/add/replace/remove MEMORY.md | `memory` | CTO |
+| `delegate` | list/spawn/steer/stop nhân viên | `delegate` | CTO |
+| `hire` | tạo vai mới, ghi `staff/<id>.md` | `hire` | CTO |
+
+## Permission cho người dùng no-code
+
+- Harness-level rule mặc định: `{ action: "*", resource: "*", effect: "allow" }`. **Không hỏi CEO.**
+- An toàn đến từ ruleset của từng vai (deny cứng), không từ dialog. Vai do `hire` tạo chỉ chọn được 4 capability, và `write` luôn bị giới hạn `drafts/*`.
+- `ask` chỉ còn xuất hiện nếu CEO/ai đó chủ động viết rule `ask` trong `staff/*.md`.
 
 ## MCP (v1.1)
 

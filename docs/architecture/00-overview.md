@@ -2,81 +2,74 @@
 
 ## Mục tiêu
 
-Harness multi-agent bằng TypeScript (Bun), nơi người dùng đóng vai **CEO** và điều phối công việc qua một agent **CTO**, hoặc gọi thẳng các **worker subagent**. Ba trọng tâm: **context engineering**, **agent loop**, **tool calling**.
+Một **công ty ảo** chạy bằng LLM cho người dùng **no-code**. Người dùng là **CEO**; họ nói chuyện với **CTO** (agent điều hành). CTO phân việc cho **nhân viên** (researcher, writer, marketer, analyst…) và **tuyển nhân viên mới** khi cần. Kết quả là tài liệu, kế hoạch, nội dung — không phải code.
 
-Hai chế độ hoạt động, cùng một runtime:
+Ba trọng tâm kỹ thuật: **context engineering**, **agent loop**, **tool calling**. Cả ba học từ hermes-agent, opencode, openclaw (xem `docs/research/`), nhưng bỏ hết phần coding-agent (shell, edit code, git).
 
-| Chế độ | Luồng | Khi nào dùng |
-|---|---|---|
-| **Orchestrated** (mặc định) | CEO ↔ CTO agent → spawn worker (coder, researcher, reviewer…) | Việc nhiều bước, cần lập kế hoạch, chia nhỏ |
-| **Direct** | CEO → `@coder làm X` / `@researcher tìm Y` | Việc nhỏ, biết rõ ai làm; debug một worker |
+## Người dùng là ai
 
-Direct mode chỉ là CEO tự làm vai CTO: cùng tool `delegate`, cùng session model, chỉ khác người gọi.
+- Không biết lập trình. Không muốn cấu hình. Không muốn bị hỏi permission.
+- Họ "dạy" công ty bằng cách sửa 2 file markdown: `COMPANY.md` (công ty làm gì) và `USER.md` (họ là ai, muốn được báo cáo thế nào).
+- Họ muốn kết quả nằm trong một thư mục (`deliverables/`) để mở ra dùng.
 
-## Mô hình vai
+Hệ quả thiết kế:
+1. **Không hỏi permission mặc định.** An toàn đến từ giới hạn năng lực của từng vai (nhân viên chỉ đọc workspace + web, chỉ ghi vào `drafts/`), không từ việc hỏi CEO từng lần.
+2. **Workspace là sandbox.** Mọi tool file bị chặn ở thư mục làm việc. Không có shell.
+3. **Mọi thứ là markdown.** Nhân viên, memory, deliverable — CEO mở bằng Notepad là hiểu.
+
+## Mô hình công ty
 
 ```
 CEO (người dùng)
- └─ CTO (primary agent, orchestrator)
-     ├─ planner     : phân rã task, viết brief
-     ├─ coder       : sửa code, chạy test
-     ├─ researcher  : đọc codebase / web, trả báo cáo
-     ├─ reviewer    : đọc diff, trả nhận xét (context: fork)
-     └─ ops         : shell, build, deploy (permission chặt)
+ └─ CTO (primary, orchestrator)         nói chuyện với CEO, lập kế hoạch, tuyển, giao việc, duyệt, báo cáo
+     ├─ researcher   tìm sự thật, đối thủ, số liệu — có web
+     ├─ writer       viết bài, email, script — ghi drafts/
+     ├─ marketer     chiến dịch, định vị, copy — ghi drafts/
+     ├─ analyst      phản biện deliverable theo brief (context: fork)
+     └─ <tuyển thêm> CTO gọi `hire` → staff/<id>.md, tồn tại qua các phiên
 ```
 
-- CTO là agent duy nhất `mode: primary` nói chuyện với CEO. Worker là `mode: subagent`, không bao giờ message CEO trực tiếp (học openclaw `SUBAGENT_TOOL_DENY_ALWAYS`).
-- Depth mặc định 1 (CTO → worker). Worker có role `orchestrator` mới được delegate tiếp (học hermes, `max_depth = 2`).
-- CEO có thể `/steer` CTO giữa chừng; CTO có thể `steer` worker.
+Hai cách CEO làm việc, cùng một runtime:
 
-## Nguyên tắc thiết kế (rút từ 3 harness)
+| Chế độ | Luồng | Khi nào |
+|---|---|---|
+| **Qua CTO** (mặc định) | CEO nói tự nhiên → CTO quyết định tự làm / giao / tuyển | Hầu hết |
+| **Trực tiếp** | `@writer viết email chào mừng` | Việc nhỏ, biết rõ ai làm |
 
-1. **Prompt-cache là kiến trúc, không phải tối ưu sau.** System prompt chia tier theo độ biến động; thứ biến động đi qua message, không rewrite prefix. Thay đổi instruction giữa session → inject diff.
-2. **Persist trước khi execute.** Assistant message có tool-call được ghi xuống store trước khi tool chạy. Crash → resume được.
-3. **Mọi thứ là message trong inbox.** User input, steer, kết quả subagent nền, compaction request, wrap-up notice — tất cả là item trong inbox với `delivery: queue | steer`. Loop chỉ có một chỗ nhận input.
-4. **Tool result có ngân sách.** Truncate theo dòng/byte, spill ra file, prune output cũ trước khi summary.
-5. **Subagent cô lập, trả kết quả gọn.** Child chỉ nhận brief (hoặc fork transcript khi cần), chỉ trả `ResultEntry` có cấu trúc. Transcript child không bao giờ vào context parent.
-6. **Permission = ruleset `{action, resource, effect}` last-match-wins**, mặc định `ask`; saved approval không bao giờ thắng `deny` đã config.
-7. **Core hẹp, capability ở rìa.** Core = loop + inbox + store + context + permission. Tools, skills, MCP, memory provider, subagent runner đều plug vào.
-8. **Không Effect-TS, không event sourcing** ở giai đoạn này. Async/await thuần + AbortSignal + append-only JSONL store. Ưu tiên đọc được.
+Direct mode vẫn spawn từ session CTO nên CTO thấy kết quả ở lượt sau.
+
+## Nguyên tắc (rút từ 3 harness)
+
+1. **Prompt-cache là kiến trúc.** System prompt chia tầng theo độ biến động, đóng băng trong phiên; thay đổi đi qua message.
+2. **Persist trước khi execute.** Crash giữa chừng vẫn resume được.
+3. **Mọi input là item trong inbox** (`queue | steer`): CEO gõ, nhân viên nộp bài, notice của harness.
+4. **Nhân viên cô lập, chỉ trả báo cáo.** Nhân viên chỉ nhận brief `{goal, context, done_when, output}`; transcript của họ không bao giờ vào context CTO.
+5. **Năng lực theo vai, không theo lời hứa.** Permission ruleset `{action, resource, effect}` last-match-wins; nhân viên do CTO tuyển không bao giờ có quyền hơn CTO và luôn bị cấm `hire`/`delegate`/`memory`.
+6. **Core hẹp.** Core = loop + inbox + store + context + permission. Vai, tool, provider, memory đều plug vào.
+7. **Async/await thuần, JSONL store.** Không Effect-TS, không event sourcing ở giai đoạn này.
 
 ## Bố cục mã nguồn
 
 ```
 src/
-  core/
-    types.ts          # Message, Part, ToolCall, Outcome, Session
-    inbox.ts          # queue | steer
-    loop.ts           # runTurn / runStep
-    store.ts          # append-only JSONL session store
-  provider/
-    types.ts          # ProviderClient.stream(request) → AsyncIterable<StreamEvent>
-    openai.ts         # OpenAI-compatible (Chat Completions)
-    anthropic.ts
-  tool/
-    define.ts         # Tool.define({name, description, input: zod, execute})
-    registry.ts
-    output.ts         # truncate + spill
-    builtin/          # read, write, edit, glob, grep, shell, question, delegate, skill, memory
-  context/
-    system.ts         # tier assembly
-    instructions.ts   # AGENTS.md discovery, hashing, diff
-    budget.ts         # token estimate {measured, estimated}
-    compaction.ts     # prune → summarize → checkpoint
-    memory.ts         # MEMORY.md / USER.md provider
-    skills.ts
-  permission/
-    ruleset.ts
-    ask.ts            # Deferred-based approval
-  agent/
-    registry.ts       # load agents/*.md
-    subagent.ts       # spawn / block / background notify
-    builtin/          # cto.md, coder.md, researcher.md, reviewer.md, planner.md, ops.md
+  core/        types, inbox, loop (runTurn/runStep), store (JSONL)
+  provider/    ProviderClient, registry (provider/model), openai-compatible
+  config.ts    hahaness.json, {env:VAR}, custom provider module
+  tool/        define, registry, execute pipeline, output truncation
+    builtin/   read, list, write, webfetch, websearch, todo, memory, question, delegate, hire
+  context/     system tiers, workspace (COMPANY/USER/MEMORY), budget, compaction
+  permission/  ruleset, ask gate
+  agent/       registry (markdown ↔ AgentDef, hire), builtin/ (cto, researcher, writer, marketer, analyst)
+  harness.ts   sessions, spawn fg/bg, ResultEntry, fork context
   cli.ts
-agents/               # user-defined agents (override builtin)
-skills/               # SKILL.md per folder
-workspace/            # SOUL.md, AGENTS.md, MEMORY.md, USER.md
-docs/
+
+<workspace của CEO>/
+  COMPANY.md  USER.md  MEMORY.md
+  staff/         nhân viên CTO đã tuyển (markdown, sửa tay được)
+  drafts/        nhân viên nộp bài
+  deliverables/  CTO lưu kết quả cuối
+  .hahaness/     sessions, tool-output (không cần mở)
+  hahaness.json  providers (tùy chọn)
 ```
 
-Chi tiết từng phần: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`.
+Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`.

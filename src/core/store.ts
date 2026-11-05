@@ -1,4 +1,4 @@
-import { mkdir, readFile, appendFile } from "node:fs/promises"
+import { mkdir, readFile, readdir, appendFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import type { Compaction, Message, Part, Session, StoreEvent } from "./types.ts"
@@ -27,6 +27,25 @@ export class SessionStore {
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line) as StoreEvent)
+  }
+
+  /** Metadata mọi phiên đã lưu (dòng đầu mỗi file), mới nhất trước. */
+  async listSessions(): Promise<Session[]> {
+    const dir = join(this.root, "sessions")
+    if (!existsSync(dir)) return []
+    const out: Session[] = []
+    for (const f of await readdir(dir)) {
+      if (!f.endsWith(".jsonl")) continue
+      const text = await readFile(join(dir, f), "utf8")
+      const first = text.slice(0, text.indexOf("\n") < 0 ? undefined : text.indexOf("\n"))
+      try {
+        const e = JSON.parse(first) as StoreEvent
+        if (e.kind === "session") out.push(e.session)
+      } catch {
+        /* corrupt first line; skip */
+      }
+    }
+    return out.sort((a, b) => b.createdAt - a.createdAt)
   }
 
   async load(sessionID: string): Promise<SessionState | undefined> {
