@@ -45,7 +45,7 @@ export class McpManager {
 
   constructor(private db: Db, private tools: ToolRegistry) {}
 
-  /** Đọc cấu hình; `connect: false` chỉ nạp trạng thái (test, CLI không cần MCP). */
+  /** Đọc cấu hình; `connect: false` chỉ nạp trạng thái (test không cần MCP). */
   async load(opts: { connect?: boolean } = {}) {
     const rows = this.db.sql.prepare("SELECT id, config FROM mcp_servers ORDER BY id").all() as Array<{ id: string; config: string }>
     const servers: McpConfig["servers"] = {}

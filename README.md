@@ -34,7 +34,6 @@ Giao diện có 6 trang: **Chat**, **Kết quả** (xem, chép, tải `.md`), **
 Các lệnh khác:
 
 ```sh
-npm run dev       # CLI trong terminal thay vì web (/staff, /quit)
 npm run ui:build  # build ui/dist, rồi
 npm run serve     # server tự serve UI tĩnh tại http://127.0.0.1:7331
 npm test          # 23 test với provider giả + MCP server giả, không cần API key

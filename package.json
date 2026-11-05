@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx src/cli.ts",
     "serve": "tsx src/server/index.ts",
     "ui": "tsx scripts/ui-dev.ts",
     "ui:dev": "vite --config ui/vite.config.ts",

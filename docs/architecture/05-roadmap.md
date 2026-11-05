@@ -9,7 +9,7 @@
 - [x] Context: system tiers, workspace COMPANY/USER/MEMORY, budget, compaction cơ bản
 - [x] Vai: cto, researcher, writer, marketer, analyst; `hire` runtime → `staff/*.md`
 - [x] `delegate` fg/bg, ResultEntry, fork context; `memory`; `websearch`/`webfetch`
-- [x] CLI readline, `@employee`, `/staff`
+- [x] `@employee` giao việc thẳng (CLI readline ban đầu đã bỏ: hệ thống chỉ có bản web)
 
 ## v0.2 — CEO dùng được hằng ngày (hiện tại)
 

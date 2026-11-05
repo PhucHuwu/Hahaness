@@ -63,9 +63,8 @@ src/
   agent/       registry (markdown ↔ AgentDef, hire/edit/update/fire, overlay từ DB), builtin/ (cto, researcher, writer, marketer, analyst)
   mcp/         client (JSON-RPC stdio/http), manager (bảng mcp_servers → ToolRegistry)
   harness.ts   sessions, resume, spawn fg/bg, ResultEntry, fork context
-  bootstrap.ts wiring chuẩn dùng chung CLI + server
-  server/      node:http API + SSE cho UI
-  cli.ts
+  bootstrap.ts wiring chuẩn cho server (và test)
+  server/      node:http API + SSE cho UI — giao diện duy nhất, không có CLI
 ui/            React + Vite: Chat, Kết quả, Tri thức, Kỹ năng, MCP, Cài đặt
 
 .hahaness/hahaness.db   (hoặc HAHANESS_DB) — toàn bộ công ty
