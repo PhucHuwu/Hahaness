@@ -549,3 +549,137 @@ Body here`, "x")
   assert.deepEqual(def.permissions, [{ action: "read", resource: "*", effect: "allow" }])
   assert.equal(def.system, "Body here")
 })
+
+test("crash resume: dangling tool-call gets an interrupted result, model is told, transcript stays valid", async () => {
+  const provider = scripted([
+    (req) => {
+      const calls = req.messages.flatMap((m) => m.parts.filter((p) => p.type === "tool-call").map((p) => (p as { callID: string }).callID))
+      const results = new Set(req.messages.flatMap((m) => m.parts.filter((p) => p.type === "tool-result").map((p) => (p as { callID: string }).callID)))
+      assert.deepEqual(calls.filter((c) => !results.has(c)), [], "every tool-call must have a result")
+      const all = req.messages.map((m) => m.parts.map((p) => (p.type === "text" ? p.text : p.type === "tool-result" ? p.output : "")).join("")).join("\n")
+      assert.match(all, /interrupted: the turn stopped/)
+      assert.match(all, /was cut off \(the app was restarted\)/)
+      return [{ type: "text-delta", text: "recovered" }, finish()]
+    },
+  ])
+  const { harness, agents, cleanup } = await setup(provider)
+  try {
+    const s = await harness.createSession({ agent: "cto" })
+    const id = s.session.id
+    // Mô phỏng server tắt giữa lúc tool chạy: claim, user msg, assistant + tool-call, không result, không release.
+    await harness.store.claim(id)
+    await harness.store.addMessage(id, { id: "m1", role: "user", source: "user", from: "ceo", createdAt: 1, parts: [{ type: "text", text: "do it" }] })
+    await harness.store.addMessage(id, { id: "m2", role: "assistant", createdAt: 2, parts: [] })
+    await harness.store.addPart(id, "m2", { type: "tool-call", callID: "c1", name: "echo", args: { text: "x" } })
+    const fresh = new Harness({ ...harness.cfg, agents })
+    await fresh.resume(id)
+    const outcome = await fresh.send(id, "continue")
+    assert.equal(outcome.tag, "completed")
+    // Bản vá được ghi vào store: lần nạp sau không cần vá nữa.
+    const state = (await fresh.store.load(id))!
+    assert.equal(state.staleClaim, false)
+    assert.ok(state.messages.find((m) => m.id === "m2")!.parts.some((p) => p.type === "tool-result" && p.callID === "c1"))
+  } finally {
+    await cleanup()
+  }
+})
+
+test("budget: provider without usage keeps the running estimate instead of resetting to 0", async () => {
+  const noUsage: StreamEvent = { type: "finish", reason: "stop", usage: { inputTokens: 0, outputTokens: 0 } }
+  const provider = scripted([() => [{ type: "text-delta", text: "x".repeat(4000) }, noUsage]])
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const s = await harness.createSession({ agent: "cto" })
+    const before = s.estimate.estimated
+    await harness.send(s.session.id, "y".repeat(4000))
+    assert.ok(s.estimate.estimated >= before + 2000, `estimate ${s.estimate.estimated} should include both messages`)
+  } finally {
+    await cleanup()
+  }
+})
+
+test("retry: honours Retry-After; too long a wait fails fast with a clear error", async () => {
+  const short = scripted([
+    () => [{ type: "error", error: new Error("429 slow down"), retryable: true, retryAfterMs: 20 }],
+    () => [{ type: "text-delta", text: "ok" }, finish()],
+  ])
+  const a = await setup(short)
+  try {
+    const s = await a.harness.createSession({ agent: "cto" })
+    const t0 = Date.now()
+    const outcome = await a.harness.send(s.session.id, "hi")
+    assert.equal(outcome.tag, "completed")
+    assert.ok(Date.now() - t0 < 900, "should wait ~20ms, not the 1s default backoff")
+  } finally {
+    await a.cleanup()
+  }
+  const long = scripted([() => [{ type: "error", error: new Error("429 quota"), retryable: true, retryAfterMs: 3_600_000 }]])
+  const b = await setup(long)
+  try {
+    const s = await b.harness.createSession({ agent: "cto" })
+    const outcome = await b.harness.send(s.session.id, "hi")
+    assert.equal(outcome.tag, "failed")
+    assert.match(outcome.tag === "failed" ? outcome.error.message : "", /wait 3600s/)
+  } finally {
+    await b.cleanup()
+  }
+})
+
+test("stream breaks after a tool call: tool result is still recorded and the turn continues", async () => {
+  let n = 0
+  const provider: ProviderClient = {
+    info: () => ({ id: "mock", contextWindow: 100_000, maxOutput: 8_000 }),
+    async *stream(req) {
+      n++
+      if (n === 1) {
+        yield { type: "tool-call", callID: "c1", name: "echo", args: { text: "a" } }
+        throw new Error("socket hang up")
+      }
+      const r = req.messages.at(-1)!.parts.find((p) => p.type === "tool-result")
+      assert.equal(r?.type === "tool-result" && r.output, "echo:a")
+      yield { type: "text-delta", text: "done" }
+      yield finish()
+    },
+  }
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const s = await harness.createSession({ agent: "cto" })
+    assert.equal((await harness.send(s.session.id, "go")).tag, "completed")
+    assert.equal(n, 2)
+  } finally {
+    await cleanup()
+  }
+})
+
+test("stop: interrupting the CTO also stops an employee it is waiting on (foreground delegate)", async () => {
+  const provider: ProviderClient = {
+    info: () => ({ id: "mock", contextWindow: 100_000, maxOutput: 8_000 }),
+    async *stream(req, signal) {
+      const first = req.messages[0]?.parts[0]
+      if (first?.type === "text" && first.text.includes("<brief>")) {
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }))
+        return
+      }
+      yield { type: "tool-call", callID: "d1", name: "delegate", args: { action: "spawn", agent: "researcher", brief: { goal: "g", context: "c", done_when: "d" } } }
+      yield finish("tool-calls")
+    },
+  }
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const main = await harness.createSession({ agent: "cto" })
+    const run = harness.send(main.session.id, "go")
+    let child: ReturnType<typeof harness.list>[number] | undefined
+    for (let i = 0; i < 100 && !child; i++) {
+      await new Promise((r) => setTimeout(r, 10))
+      child = harness.list().find((l) => l.session.parentID === main.session.id)
+    }
+    assert.ok(child, "child spawned")
+    harness.interrupt(main.session.id)
+    assert.equal((await run).tag, "interrupted")
+    await child.running
+    assert.equal(child.abort.signal.aborted, true)
+    assert.equal(child.running, undefined)
+  } finally {
+    await cleanup()
+  }
+})

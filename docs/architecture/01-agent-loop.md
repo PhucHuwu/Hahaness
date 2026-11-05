@@ -83,14 +83,19 @@ async function runTurn(session, signal) {
 ### Retry & lỗi provider
 
 - 429 / 5xx / network → `retry` với backoff 1s→2s→4s→8s, tối đa 5 lần; 401/403 → `failed` ngay.
-- Stream đứt sau khi đã có output → `continue` với steer `CONTINUE_AFTER_INCOMPLETE_STREAM`.
+- Provider gửi `retry-after-ms` / `retry-after` → chờ đúng thời gian đó thay cho backoff. Chờ quá 60s (vd hết quota ngày) → `failed` ngay với lỗi "provider asked to wait Ns", không treo lượt.
+- Stream đứt (provider ném hoặc trả `error`) sau khi đã phát tool-call → tool vẫn chạy xong, result vẫn được ghi, lượt `continue`. Đứt trước tool-call → `retry` như lỗi mạng.
+- Bị dừng giữa stream: OpenAI provider không phát tool-call có args dở dang; loop không khởi động tool mới sau khi đã abort; text đã stream được giữ lại.
+- `usage.inputTokens = 0` (proxy không trả usage) → **không** reset `measured`; cộng dồn ước lượng chars/4. Trước đây reset về 0 khiến compaction không bao giờ kích hoạt.
+- Dừng CTO khi đang chờ nhân viên (`delegate` foreground) → signal của tool call lan xuống `spawn`, nhân viên bị abort theo. Nhân viên chạy nền không bị dừng theo (dừng bằng `delegate stop` hoặc nút Dừng ở phiên của họ).
 - Provider báo context quá dài → `compaction.recoverOverflow()` thử shrink `[0.85, 0.7, 0.5]` → `compacted`.
 - Provider fallback: `agent.model` là list; hết retry với model đầu → đổi sang model tiếp theo (học hermes `fallback_providers`).
 
 ### Durability
 
 - Store là event log append-only trong SQLite: bảng `events` (seq, session_id, kind, data JSON), đọc lại bằng `fold`; metadata ở bảng `sessions` (xem `08-storage.md`). Mỗi dòng = `MessageAppended | PartUpdated | ToolResult | Compaction | Claim | Release`.
-- Khi boot: session có `Claim` không có `Release` → mark tool `running` thành `failed("stale")`, push steer `RESUMED_AFTER_CRASH`, chạy tiếp.
+- **Tool-call mồ côi** (có `tool-call` mà không có `tool-result`, do server tắt giữa lúc tool chạy): `repairDangling` ghi result `interrupted: …` (isError) vào store. Chạy ở `Harness.resume` và đầu mỗi `runTurn`. Lý do: API kiểu OpenAI trả 400 cho mọi request có `tool_calls` thiếu tool message → không vá thì phiên hỏng vĩnh viễn.
+- `resume` thấy `staleClaim` (Claim không có Release) hoặc vừa vá tool-call → xếp `RESUMED_AFTER_CRASH` (system message) vào inbox, model thấy ở lượt kế tiếp. **Không tự chạy tiếp**: lượt dở có thể tốn tiền và CEO có thể không còn muốn; CEO nhắn tiếp là đủ.
 
 ## Những gì cố ý KHÔNG làm ở v1
 

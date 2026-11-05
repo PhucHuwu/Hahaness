@@ -3,7 +3,7 @@
 ## v0.1 — Skeleton (hiện tại)
 
 - [x] Loop: runTurn/runStep, stream, tool song song, Outcome, doom-loop guard cơ bản
-- [x] Inbox queue/steer; JSONL store; claim/release
+- [x] Inbox queue/steer; event store (JSONL, nay là SQLite); claim/release
 - [x] Tool.define + registry + truncate; permission ruleset + ask gate
 - [x] Provider registry `provider/model`, OpenAI-compatible, custom module, `hahaness.json`
 - [x] Context: system tiers, workspace COMPANY/USER/MEMORY, budget, compaction cơ bản
@@ -25,7 +25,9 @@
 - [x] CTO tự quản lý công ty bằng tool: `knowledge`, `manage_skill`, `staff`, `mcp_manage` (add cần CEO duyệt); tool `search`
 - [x] Trang Kết quả: xem/chép/tải `.md` deliverables + drafts
 - [ ] Tải kết quả dạng `.docx` / `.pdf`
-- [ ] Crash resume từ claim (hiện `resume` chỉ nạp transcript, không tự chạy tiếp)
+- [x] Độ bền loop: vá tool-call mồ côi, báo model sau crash (không tự chạy tiếp), giữ ước lượng khi proxy không trả usage, `Retry-After`, stream đứt sau tool-call, dừng CTO dừng luôn nhân viên foreground — xem `01-agent-loop.md`
+- [ ] Compaction đủ dùng: overflow recovery (shrink/drop), retry khi thiếu heading, `compaction.model`, memory flush
+- [ ] Tài liệu đổi giữa phiên (COMPANY/knowledge/skills) → inject diff qua message (`changed()` đã có, chưa nối)
 - [ ] Memory flush trước compaction; daily notes
 - [ ] Workspace file đổi giữa phiên → inject diff
 - [ ] Provider Anthropic; fallback theo list `agent.model`
