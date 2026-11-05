@@ -2,7 +2,7 @@
 
 ## Định nghĩa một vai
 
-`src/agent/builtin/<id>.md` (có sẵn) hoặc `staff/<id>.md` trong workspace (CTO tuyển, hoặc CEO/ai đó viết tay):
+`src/agent/builtin/<id>.md` (có sẵn, là code) hoặc một dòng trong bảng `staff` của DB (CTO tuyển/sửa bằng tool, hoặc CEO sửa trên UI). Cả hai cùng một dạng markdown:
 
 ```md
 ---
@@ -21,13 +21,13 @@ permissions:
 Bạn là … (job description = system prompt)
 ```
 
-Merge: builtin → `staff/` → config. Cùng id thì sau thắng, permissions nối thêm.
+Merge: builtin → bảng `staff` (`AgentRegistry.useDb`). Cùng id thì dòng DB thắng; `fired = 1` xóa vai. Vai `primary` (CTO) không bị đè/đuổi. Xem `08-storage.md`.
 
 ## Vai có sẵn
 
 | id | mode | context | Làm gì | Tool |
 |---|---|---|---|---|
-| `cto` | primary | — | Nói chuyện với CEO; lập kế hoạch, tuyển, giao việc, duyệt, lưu deliverable, ghi memory | `delegate`, `hire`, `memory`, `todo`, `question`, `read`, `list`, `write`, `webfetch` |
+| `cto` | primary | — | Nói chuyện với CEO; lập kế hoạch, tuyển, giao việc, duyệt, lưu deliverable, ghi memory; quản lý tri thức, kỹ năng, nhân viên, MCP | `delegate`, `hire`, `memory`, `todo`, `question`, `read`, `list`, `search`, `write`, `webfetch`, `knowledge`, `manage_skill`, `staff`, `mcp_manage` |
 | `researcher` | subagent | isolated | Sự thật, đối thủ, số liệu, nguồn | `read`, `webfetch`, `websearch` |
 | `writer` | subagent | isolated | Bài viết, email, script | `read`, `write(drafts/*)`, `webfetch` |
 | `marketer` | subagent | isolated | Chiến dịch, định vị, copy | `read`, `write(drafts/*)`, `webfetch` |
@@ -42,8 +42,8 @@ hire({ id, name, description, system, capabilities: ("read"|"write"|"webfetch"|"
 ```
 
 - Harness dịch `capabilities` thành ruleset cố định. CTO **không** tự viết permission — tránh việc model cấp quyền quá tay.
-- Luôn cứng: `write` chỉ `drafts/*`; `delegate`, `hire`, `memory`, `question` = deny.
-- Ghi `staff/<id>.md` ngay → tồn tại qua các phiên; CEO mở ra sửa job description bằng tay được.
+- Luôn cứng: `write` chỉ `drafts/*`; mọi `MANAGEMENT_ACTIONS` (delegate, hire, memory, question, knowledge, manage_skill, staff, mcp_manage) = deny.
+- Ghi vào bảng `staff` ngay → tồn tại qua các phiên. Sau này CTO sửa job description/capabilities hoặc cho nghỉ bằng tool `staff` (`show`/`edit`/`fire`); CEO cũng sửa được trên UI.
 - Không được ghi đè vai `primary`. Trùng id → báo lỗi cho model, gợi ý dùng `delegate`.
 - `id` được slug hóa.
 
@@ -88,7 +88,7 @@ files: drafts/welcome-email.md
 
 ### Isolation của nhân viên
 
-- Hard deny (không config được): `question` (không hỏi CEO trực tiếp), `memory`, `hire`, `delegate` nếu `role: leaf`.
+- Hard deny (không config được): mọi `MANAGEMENT_ACTIONS` trừ `delegate` — gồm `question` (không hỏi CEO trực tiếp), `memory`, `hire`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`; thêm `delegate` nếu `role: leaf`. Test: "employees never get management tools".
 - Ruleset = `inherit(parent, child)`: parent deny → child không bao giờ allow.
 - System context: Tier A của chính họ + `COMPANY.md`; **không** có `USER.md`/`MEMORY.md` (không cần biết sếp thích gì, và giảm rò rỉ).
 - `context: fork` (analyst): thêm summary compaction gần nhất của CTO + 20 message gần nhất, cap 30k token.
@@ -99,8 +99,8 @@ files: drafts/welcome-email.md
 2. `delegate(list)` → không ai hợp → `hire` → `delegate(spawn)`.
 3. Việc độc lập chạy `background: true` song song.
 4. Nhận bài → đối chiếu với brief → chưa đạt thì `steer` với feedback cụ thể, không đẩy bài yếu lên CEO.
-5. Xong → `write deliverables/<name>.md` → báo path.
-6. Ghi `memory` sự thật lâu dài về công ty/CEO.
+5. Xong → `write deliverables/<name>.md` → báo tên tài liệu; CEO xem/tải ở trang **Kết quả**.
+6. Ghi `memory` sự thật lâu dài về công ty/CEO; tài liệu CEO đưa → `knowledge`; cách làm lặp lại → `manage_skill`.
 7. Báo cáo kiểu executive: kết quả, quyết định đã làm, cần gì từ CEO. Không transcript.
 
 ## CEO

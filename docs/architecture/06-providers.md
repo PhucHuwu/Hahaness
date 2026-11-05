@@ -20,9 +20,9 @@ Model luôn viết dạng `providerID/modelID` (`openrouter/anthropic/claude-son
 
 Agent khai báo `model: [a/x, b/y]` là danh sách fallback (v0.2 mới dùng phần tử sau khi phần tử đầu hết retry).
 
-## Config: `hahaness.json`
+## Config
 
-Tìm theo thứ tự: `./hahaness.json` → `./.hahaness/config.json` → `~/.hahaness/config.json`. Project thắng user; `providers` merge theo id.
+Lưu trong DB (bảng `settings`, key `config`; xem `08-storage.md`), CEO sửa ở trang **Cài đặt**. `~/.hahaness/config.json` (nếu có) là nền cấp máy: DB thắng, `providers` merge theo id. Lần đầu (chưa có setting), `./hahaness.json` hoặc `./.hahaness/config.json` được nhập vào DB một lần — tiện cho test/CI. Cùng một hình dạng JSON:
 
 ```json
 {
@@ -36,7 +36,7 @@ Tìm theo thứ tự: `./hahaness.json` → `./.hahaness/config.json` → `~/.ha
 }
 ```
 
-- `{env:NAME}` được thay bằng biến môi trường ở `apiKey` và `headers`. Không bao giờ ghi key thật vào file commit.
+- `{env:NAME}` được thay bằng biến môi trường ở `apiKey` và `headers`. Key thật nhập ở Cài đặt nằm trong file `.db` (đừng chia sẻ file đó); API không bao giờ trả key ra UI.
 - `models.<id>` khai `contextWindow` / `maxOutput` để budget và compaction tính đúng; thiếu thì mặc định 128k / 16k.
 - Không có config → fallback `OPENAI_API_KEY` + `OPENAI_BASE_URL` từ env, provider id `openai`.
 

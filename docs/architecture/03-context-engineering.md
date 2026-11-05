@@ -28,15 +28,15 @@ Lý do: cả 3 harness đều hội tụ về "prefix bất biến, biến độ
 
 ## Workspace của công ty (`context/workspace.ts`)
 
-Người dùng no-code "dạy" công ty bằng 2 file markdown, harness tự tạo template lần đầu chạy:
+Tài liệu công ty là bản ghi trong bảng `documents` (path ảo, xem `08-storage.md`). CEO "dạy" công ty bằng cách nói với CTO; CTO ghi bằng `knowledge` / `memory` / `manage_skill`. Harness tạo template COMPANY/USER lần đầu; template chưa sửa (chỉ heading/comment) **không** vào prompt.
 
-| File | Ai thấy | Nội dung | Cap |
+| Tài liệu | Ai thấy | Nội dung | Cap |
 |---|---|---|---|
 | `COMPANY.md` | mọi vai | công ty làm gì, sản phẩm, khách hàng, giọng văn | 20k chars |
 | `USER.md` | CTO | CEO là ai, muốn báo cáo thế nào, ghét gì | 20k |
 | `MEMORY.md` | CTO | CTO tự ghi qua tool `memory`, mục ngăn bằng `§` | 4k, bỏ cũ nhất khi đầy |
-| `knowledge/**` | mọi vai | chỉ **index** `<knowledge>` (path + dòng đầu); nội dung đọc bằng `read` | 60 file trong index |
-| `skills/*/SKILL.md` | mọi vai | chỉ **index** `<available_skills>` ở Tier A; thân load bằng tool `skill` | — |
+| `knowledge/**` | mọi vai | chỉ **index** `<knowledge>` (path + dòng đầu); nội dung đọc bằng `read`/`search` | 60 tài liệu trong index |
+| kỹ năng (bảng `skills`) | mọi vai | chỉ **index** `<available_skills>` ở Tier A; thân load bằng tool `skill` | — |
 
 - Nhân viên không thấy `USER.md`/`MEMORY.md`: họ không cần biết sếp, và giảm rò rỉ sở thích cá nhân vào bài viết.
 - Mỗi source hash SHA-256, baseline lưu theo session. Đổi giữa phiên → (v0.2) push steer message chứa diff, không rewrite system.
@@ -113,11 +113,11 @@ Nhỏ và đọc được, học hermes + openclaw:
 
 - `MEMORY.md` — cap 4.000 chars, mục ngăn bằng `§`. Tool `memory` với `list | add | replace | remove`, chỉ CTO có.
 - Snapshot vào system khi session bắt đầu; sửa giữa session → chỉ hiện ở session sau (đổi lại là cache ổn định). Tool trả về toàn bộ memory sau mỗi lần ghi nên model vẫn "thấy" ngay.
-- v0.2: `memory/YYYY-MM-DD.md` daily notes; memory flush trước compaction; `session_search` FTS trên JSONL cũ.
+- v0.2: `memory/YYYY-MM-DD.md` daily notes; memory flush trước compaction; `session_search` trên bảng `events`.
 
 ## Skills (`context/skills.ts`)
 
-- `skills/<id>/SKILL.md` với frontmatter `name`, `description`. Chỉ `<available_skills>` (id + description) vào Tier A.
+- Kỹ năng (bảng `skills`) là markdown có frontmatter `name`, `description`; CTO tạo/sửa bằng `manage_skill`. Chỉ `<available_skills>` (id + description) vào Tier A.
 - Tool `skill({ id })` trả full nội dung + đường dẫn resources. Permission action `skill`.
 - Agent có thể khai báo `skills: [...]` để preload vào system (hiếm, cho agent chuyên biệt).
 

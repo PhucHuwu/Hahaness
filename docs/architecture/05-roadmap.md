@@ -21,13 +21,18 @@
 - [x] MCP client stdio + streamable HTTP, `.hahaness/mcp.json`, bật/tắt từ UI
 - [x] Settings: providers/model trong `hahaness.json`, gọi thử, reconfigure không restart
 - [x] `question` + permission ask trả lời trong chat
+- [x] Lưu trữ một file SQLite (`node:sqlite`): phiên, tài liệu, nhân viên, kỹ năng, config, MCP; nhập bố cục thư mục cũ một lần — xem `08-storage.md`
+- [x] CTO tự quản lý công ty bằng tool: `knowledge`, `manage_skill`, `staff`, `mcp_manage` (add cần CEO duyệt); tool `search`
+- [x] Trang Kết quả: xem/chép/tải `.md` deliverables + drafts
+- [ ] Tải kết quả dạng `.docx` / `.pdf`
 - [ ] Crash resume từ claim (hiện `resume` chỉ nạp transcript, không tự chạy tiếp)
 - [ ] Memory flush trước compaction; daily notes
 - [ ] Workspace file đổi giữa phiên → inject diff
 - [ ] Provider Anthropic; fallback theo list `agent.model`
 - [ ] `websearch` qua provider có key (Tavily/Brave) khi cấu hình
 - [ ] Nhân viên hỏi ngược: `status: needs_input` → CTO hỏi CEO
-- [ ] Upload file nhị phân (PDF/DOCX) vào `knowledge/` + trích text
+- [ ] Upload file nhị phân (PDF/DOCX) vào tri thức + trích text
+- [ ] Tìm kiếm FTS khi `node:sqlite` có FTS5 (hiện lọc trong JS)
 
 ## v0.3 — Công ty "sống"
 
@@ -49,5 +54,5 @@
 
 1. `analyst` fork bao nhiêu context của CTO? (Chọn tạm: summary + 20 message, cap 30k.)
 2. Memory ghi giữa phiên: đóng băng tới phiên sau hay re-inject? (Chọn tạm: đóng băng; tool result đã cho model thấy.)
-3. CTO có được tự sửa job description của nhân viên cũ (`hire` với id trùng → update) không, hay chỉ CEO sửa tay? (Chọn tạm: chỉ CEO, tránh CTO "cải tổ" công ty mà CEO không biết.)
+3. CTO có được tự sửa job description của nhân viên cũ không? (Đã chốt: có, qua tool `staff` — CEO chỉ ra lệnh, không tự sửa. CTO được dặn chỉ sửa/cho nghỉ khi CEO yêu cầu hoặc vai rõ ràng kém, và báo lại một dòng.)
 4. Nhân viên có nên thấy `USER.md` khi viết nội dung nhân danh CEO (email ký tên CEO)? (Chọn tạm: không; CTO đưa thông tin cần thiết vào `brief.context`.)

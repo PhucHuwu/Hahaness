@@ -9,6 +9,15 @@ function meta(d: DocView) {
   return `${by}${new Date(d.updatedAt).toLocaleString()}`
 }
 
+/** location.hash giữ ký tự tiếng Việt/khoảng trắng ở dạng %XX. */
+function decode(s: string) {
+  try {
+    return decodeURIComponent(s)
+  } catch {
+    return s
+  }
+}
+
 function name(path: string) {
   return path.replace(/^(deliverables|drafts)\//, "")
 }
@@ -31,8 +40,8 @@ export function Results({ path }: { path?: string }) {
     if (ev.type === "tool-end" && ev.name === "write" && !ev.isError) void load()
   })
 
-  const selected = path ?? view?.deliverables[0]?.path
-  const open = (p: string) => (location.hash = `results/${p}`)
+  const selected = (path && decode(path)) || view?.deliverables[0]?.path
+  const open = (p: string) => (location.hash = `results/${encodeURIComponent(p)}`)
 
   const section = (title: string, items: DocView[] | undefined, empty: string) => (
     <section>

@@ -41,7 +41,7 @@ model emits tool-call
 ### Truncation & spill (`tool/output.ts`)
 
 - `MAX_LINES = 2000`, `MAX_BYTES = 50 * 1024`.
-- Vượt → ghi `.hahaness/tool-output/<callID>.txt`, output kết thúc bằng `[showing lines 1-N of M; full output saved to <path>]`. Model có thể `read` file đó với offset.
+- Vượt → lưu bản đầy đủ vào tài liệu ẩn `tool-output/<callID>.txt` (qua callback `saveOutput` của harness), output kết thúc bằng `[showing lines 1-N of M; full output saved to <path>, read it with offset/limit]`. Model `read` lại với offset.
 - Tool `shell` có thêm `tail` mode: giữ 200 dòng cuối thay vì đầu (log build thường quan trọng ở cuối).
 
 ## Permission (`permission/ruleset.ts`)
@@ -52,7 +52,7 @@ type Rule = { action: string; resource: string; effect: "allow" | "ask" | "deny"
 ```
 
 - Thứ tự merge: `config.permissions` → `agent.permissions` → `session.permissions` (saved "always" của user). Saved rule **không override** rule `deny` có sẵn: check `denied()` trước.
-- Actions chuẩn: `read`, `write`, `webfetch`, `websearch`, `delegate`, `hire`, `memory`, `mcp:<server>:<tool>`.
+- Actions chuẩn: `read`, `write`, `webfetch`, `websearch`, `mcp:<server>:<tool>` và nhóm quản trị `MANAGEMENT_ACTIONS` = `delegate`, `hire`, `memory`, `question`, `knowledge`, `manage_skill`, `staff`, `mcp_manage` (chỉ CTO).
 - `write` có resource = path → rule `{ write, "drafts/*", allow }` + `{ write, "*", deny }` giới hạn nhân viên.
 - Chế độ unattended (cron/background subagent không có người trả lời): `ask` → `deny`.
 - Tắt tool cho agent = rule `{ action: "<tool>", resource: "*", effect: "deny" }`; registry `snapshot(ruleset)` lọc tool bị `deny *` khỏi definitions luôn (tiết kiệm token).
@@ -65,12 +65,13 @@ type Rule = { action: string; resource: string; effect: "allow" | "ask" | "deny"
 
 ## Builtin tools v0.1
 
-Không có shell, không edit code. Mọi tool file bị chặn trong workspace (`inside()` ném lỗi nếu path thoát ra ngoài).
+Không có shell, không edit code. Tool tài liệu (`documentTools(docs)`) đọc/ghi bảng `documents` trong DB, không chạm filesystem; path ảo được chuẩn hóa và `..` bị từ chối (`normalizePath`).
 
 | Tool | Mục đích | Permission action | Ai có |
 |---|---|---|---|
-| `read` | đọc tài liệu trong workspace | `read` | mọi vai |
-| `list` | liệt kê thư mục | `read` | mọi vai |
+| `read` | đọc tài liệu công ty | `read` | mọi vai |
+| `list` | liệt kê "thư mục" tài liệu | `read` | mọi vai |
+| `search` | tìm cụm từ trong tài liệu (không phân biệt hoa thường, cả tiếng Việt) | `read` | mọi vai |
 | `write` | tạo/ghi đè tài liệu | `write` (resource = path, nhân viên chỉ `drafts/*`) | CTO, writer, marketer |
 | `webfetch` | tải trang → text | `webfetch` (resource = hostname) | CTO, researcher, writer, marketer |
 | `websearch` | tìm web (DuckDuckGo HTML, không cần key) | `websearch` | researcher |
@@ -78,15 +79,19 @@ Không có shell, không edit code. Mọi tool file bị chặn trong workspace 
 | `todo` | plan list của phiên | — | mọi vai |
 | `memory` | list/add/replace/remove MEMORY.md | `memory` | CTO |
 | `delegate` | list/spawn/steer/stop nhân viên | `delegate` | CTO |
-| `hire` | tạo vai mới, ghi `staff/<id>.md` | `hire` | CTO |
-| `skill` | load thân `skills/<id>/SKILL.md` | `skill` | mọi vai |
+| `hire` | tạo vai mới (bảng `staff`) | `hire` | CTO |
+| `staff` | show/edit/fire nhân viên (không đụng CTO) | `staff` (resource = id) | CTO |
+| `knowledge` | thư viện `knowledge/*`, COMPANY.md, USER.md | `knowledge` (resource = action) | CTO |
+| `manage_skill` | tạo/sửa/xóa kỹ năng | `manage_skill` | CTO |
+| `mcp_manage` | nối/bật/tắt/gỡ server MCP | `mcp_manage` (resource = action; `add` là `ask`) | CTO |
+| `skill` | load thân một kỹ năng | `skill` | mọi vai |
 | `<server>_<tool>` | tool từ MCP server (xem `07-ui-server.md`) | `mcp:<server>:<tool>` | mọi vai, trừ khi vai deny `mcp:*` |
 
 ## Permission cho người dùng no-code
 
 - Harness-level rule mặc định: `{ action: "*", resource: "*", effect: "allow" }`. **Không hỏi CEO.**
 - An toàn đến từ ruleset của từng vai (deny cứng), không từ dialog. Vai do `hire` tạo chỉ chọn được 4 capability, và `write` luôn bị giới hạn `drafts/*`.
-- `ask` chỉ còn xuất hiện nếu CEO/ai đó chủ động viết rule `ask` trong `staff/*.md`.
+- `ask` chỉ xuất hiện ở `mcp_manage add` của CTO (server stdio chạy lệnh trên máy CEO) hoặc nếu ai đó chủ động viết rule `ask` vào định nghĩa vai.
 
 ## MCP (v1.1)
 

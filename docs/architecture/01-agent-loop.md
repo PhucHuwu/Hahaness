@@ -89,7 +89,7 @@ async function runTurn(session, signal) {
 
 ### Durability
 
-- Store là JSONL append-only per session: `sessions/<id>/events.jsonl`. Mỗi dòng = `MessageAppended | PartUpdated | ToolResult | Compaction | Claim | Release`.
+- Store là event log append-only trong SQLite: bảng `events` (seq, session_id, kind, data JSON), đọc lại bằng `fold`; metadata ở bảng `sessions` (xem `08-storage.md`). Mỗi dòng = `MessageAppended | PartUpdated | ToolResult | Compaction | Claim | Release`.
 - Khi boot: session có `Claim` không có `Release` → mark tool `running` thành `failed("stale")`, push steer `RESUMED_AFTER_CRASH`, chạy tiếp.
 
 ## Những gì cố ý KHÔNG làm ở v1

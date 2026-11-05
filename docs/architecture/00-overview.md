@@ -9,13 +9,13 @@ Ba trọng tâm kỹ thuật: **context engineering**, **agent loop**, **tool ca
 ## Người dùng là ai
 
 - Không biết lập trình. Không muốn cấu hình. Không muốn bị hỏi permission.
-- Họ "dạy" công ty bằng cách sửa 2 file markdown: `COMPANY.md` (công ty làm gì) và `USER.md` (họ là ai, muốn được báo cáo thế nào).
-- Họ muốn kết quả nằm trong một thư mục (`deliverables/`) để mở ra dùng.
+- Họ **không tự làm gì**, chỉ giao lệnh. "Dạy" công ty = nói với CTO ("ghi nhớ bảng giá này"); CTO lưu vào tri thức, kỹ năng, nhân viên bằng tool quản trị (`08-storage.md`).
+- Họ xem và tải kết quả ở trang **Kết quả** trên UI, không mở thư mục.
 
 Hệ quả thiết kế:
-1. **Không hỏi permission mặc định.** An toàn đến từ giới hạn năng lực của từng vai (nhân viên chỉ đọc workspace + web, chỉ ghi vào `drafts/`), không từ việc hỏi CEO từng lần.
-2. **Workspace là sandbox.** Mọi tool file bị chặn ở thư mục làm việc. Không có shell.
-3. **Mọi thứ là markdown.** Nhân viên, memory, deliverable — CEO mở bằng Notepad là hiểu.
+1. **Không hỏi permission mặc định.** An toàn đến từ giới hạn năng lực của từng vai (nhân viên chỉ đọc tài liệu + web, chỉ ghi vào `drafts/`), không từ việc hỏi CEO từng lần. Ngoại lệ: nối MCP mới (chạy lệnh trên máy) cần CEO duyệt.
+2. **Một file SQLite là cả công ty.** Tài liệu là bản ghi trong DB, không phải file trên đĩa → tool tài liệu không chạm được filesystem. Không có shell.
+3. **Nội dung vẫn là markdown.** Nhân viên, kỹ năng, memory, deliverable lưu dạng markdown trong DB; UI hiển thị, CEO sửa được khi muốn.
 
 ## Mô hình công ty
 
@@ -26,7 +26,7 @@ CEO (người dùng)
      ├─ writer       viết bài, email, script — ghi drafts/
      ├─ marketer     chiến dịch, định vị, copy — ghi drafts/
      ├─ analyst      phản biện deliverable theo brief (context: fork)
-     └─ <tuyển thêm> CTO gọi `hire` → staff/<id>.md, tồn tại qua các phiên
+     └─ <tuyển thêm> CTO gọi `hire` → bảng `staff`, tồn tại qua các phiên; sửa/cho nghỉ bằng `staff`
 ```
 
 Hai cách CEO làm việc, cùng một runtime:
@@ -44,38 +44,35 @@ Direct mode vẫn spawn từ session CTO nên CTO thấy kết quả ở lượt
 2. **Persist trước khi execute.** Crash giữa chừng vẫn resume được.
 3. **Mọi input là item trong inbox** (`queue | steer`): CEO gõ, nhân viên nộp bài, notice của harness.
 4. **Nhân viên cô lập, chỉ trả báo cáo.** Nhân viên chỉ nhận brief `{goal, context, done_when, output}`; transcript của họ không bao giờ vào context CTO.
-5. **Năng lực theo vai, không theo lời hứa.** Permission ruleset `{action, resource, effect}` last-match-wins; nhân viên do CTO tuyển không bao giờ có quyền hơn CTO và luôn bị cấm `hire`/`delegate`/`memory`.
+5. **Năng lực theo vai, không theo lời hứa.** Permission ruleset `{action, resource, effect}` last-match-wins; nhân viên do CTO tuyển không bao giờ có quyền hơn CTO và luôn bị cấm mọi tool quản trị (`MANAGEMENT_ACTIONS`).
 6. **Core hẹp.** Core = loop + inbox + store + context + permission. Vai, tool, provider, memory đều plug vào.
-7. **Async/await thuần, JSONL store.** Không Effect-TS, không event sourcing ở giai đoạn này.
+7. **Async/await thuần, event log append-only trong SQLite** (`node:sqlite`, không thêm dependency). Không Effect-TS.
 
 ## Bố cục mã nguồn
 
 ```
 src/
-  core/        types, inbox, loop (runTurn/runStep), store (JSONL)
+  core/        types, inbox, loop (runTurn/runStep), db (SQLite), store (event log), migrate (nhập bố cục cũ)
   provider/    ProviderClient, registry (provider/model), openai-compatible
-  config.ts    hahaness.json, {env:VAR}, custom provider module
+  config.ts    config trong DB, {env:VAR}, custom provider module
   tool/        define, registry, execute pipeline, output truncation
-    builtin/   read, list, write, webfetch, websearch, todo, memory, question, delegate, hire, skill
-  context/     system tiers, workspace (COMPANY/USER/MEMORY/knowledge), skills, budget, compaction
+    builtin/   read, list, search, write, webfetch, websearch, todo, memory, question, delegate, hire, skill,
+               manage (knowledge, manage_skill, staff, mcp_manage)
+  context/     system tiers, documents (DocumentStore), workspace (COMPANY/USER/MEMORY/knowledge), skills, budget, compaction
   permission/  ruleset, ask gate
-  agent/       registry (markdown ↔ AgentDef, hire/update/fire), builtin/ (cto, researcher, writer, marketer, analyst)
-  mcp/         client (JSON-RPC stdio/http), manager (mcp.json → ToolRegistry)
+  agent/       registry (markdown ↔ AgentDef, hire/edit/update/fire, overlay từ DB), builtin/ (cto, researcher, writer, marketer, analyst)
+  mcp/         client (JSON-RPC stdio/http), manager (bảng mcp_servers → ToolRegistry)
   harness.ts   sessions, resume, spawn fg/bg, ResultEntry, fork context
   bootstrap.ts wiring chuẩn dùng chung CLI + server
   server/      node:http API + SSE cho UI
   cli.ts
-ui/            React + Vite: Chat, Tri thức, Kỹ năng, MCP, Cài đặt
+ui/            React + Vite: Chat, Kết quả, Tri thức, Kỹ năng, MCP, Cài đặt
 
-<workspace của CEO>/
-  COMPANY.md  USER.md  MEMORY.md
-  knowledge/     tài liệu tham khảo (index vào prompt, nội dung đọc khi cần)
-  skills/        <id>/SKILL.md — quy trình viết sẵn
-  staff/         nhân viên CTO đã tuyển (markdown, sửa tay được)
-  drafts/        nhân viên nộp bài
-  deliverables/  CTO lưu kết quả cuối
-  .hahaness/     sessions, tool-output, mcp.json (không cần mở)
-  hahaness.json  providers (tùy chọn, sửa được từ UI)
+.hahaness/hahaness.db   (hoặc HAHANESS_DB) — toàn bộ công ty
+  sessions, events      hội thoại
+  documents             COMPANY.md, USER.md, MEMORY.md, knowledge/*, drafts/*, deliverables/*, tool-output/*
+  staff, skills         nhân viên đã tuyển/sửa, kỹ năng
+  settings, mcp_servers providers/model, server MCP
 ```
 
-Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`.
+Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`, `08-storage.md`.
