@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm, readFile } from "node:fs/promises"
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -11,6 +11,9 @@ import { ToolRegistry } from "./tool/registry.ts"
 import { define } from "./tool/define.ts"
 import { delegate } from "./tool/builtin/delegate.ts"
 import { hire } from "./tool/builtin/hire.ts"
+import { skill } from "./tool/builtin/skill.ts"
+import { SkillStore } from "./context/skills.ts"
+import * as workspace from "./context/workspace.ts"
 import { existsSync } from "node:fs"
 import type { ModelRequest, ProviderClient, StreamEvent } from "./provider/types.ts"
 import { evaluate, denied } from "./permission/ruleset.ts"
@@ -38,6 +41,7 @@ const finish = (reason: "stop" | "tool-calls" = "stop"): StreamEvent => ({ type:
 
 async function setup(provider: ProviderClient) {
   const dir = await mkdtemp(join(tmpdir(), "hahaness-"))
+  await workspace.ensure(dir)
   const agents = await new AgentRegistry().load(join(here, "agent", "builtin"))
   const echo = define({
     name: "echo",
@@ -89,6 +93,63 @@ test("hire: CTO creates a new employee at runtime, persisted, then delegates to 
     assert.equal(reloaded.get("seo-specialist").system, "You audit SEO.")
     assert.equal(reloaded.get("seo-specialist").permissions.find((r) => r.action === "webfetch")?.effect, "allow")
     assert.equal(reloaded.get("seo-specialist").permissions.find((r) => r.action === "websearch")?.effect, "deny")
+  } finally {
+    await cleanup()
+  }
+})
+
+test("skills: index in Tier A only when skills exist; `skill` tool loads body; knowledge index in Tier B", async () => {
+  const provider = scripted([
+    (req) => {
+      assert.match(req.system[0]!, /<available_skills>[\s\S]*<skill id="weekly-report">Use for weekly summaries<\/skill>/)
+      assert.match(req.system[1]!, /<knowledge>[\s\S]*knowledge\/brand.md — Brand voice/)
+      return [{ type: "tool-call", callID: "c1", name: "skill", args: { id: "weekly-report" } }, finish("tool-calls")]
+    },
+    (req) => {
+      const r = req.messages.at(-1)!.parts.find((p) => p.type === "tool-result")
+      assert.match(r!.output, /Step one/)
+      return [{ type: "text-delta", text: "ok" }, finish()]
+    },
+  ])
+  const { harness, dir, cleanup } = await setup(provider)
+  try {
+    const store = new SkillStore(join(dir, "skills"))
+    assert.equal(await store.index(), undefined)
+    await store.write("weekly-report", "---\nname: Weekly report\ndescription: Use for weekly summaries\n---\nStep one.")
+    await writeFile(join(dir, "knowledge", "brand.md"), "# Brand voice\nFriendly.")
+    harness.cfg.skills = store
+    harness.cfg.tools.register(skill(store))
+    const main = await harness.createSession({ agent: "cto" })
+    const outcome = await harness.send(main.session.id, "weekly report please")
+    assert.equal(outcome.tag, "completed")
+  } finally {
+    await cleanup()
+  }
+})
+
+test("resume: a stored session is reloaded with its transcript and continues", async () => {
+  const provider = scripted([
+    () => [{ type: "text-delta", text: "first" }, finish()],
+    (req) => {
+      assert.equal(req.messages.length, 3)
+      assert.equal(req.messages[0]!.parts.map((p) => (p.type === "text" ? p.text : "")).join(""), "one")
+      return [{ type: "text-delta", text: "second" }, finish()]
+    },
+  ])
+  const { harness, dir, agents, cleanup } = await setup(provider)
+  try {
+    const main = await harness.createSession({ agent: "cto" })
+    await harness.send(main.session.id, "one")
+    const fresh = new Harness({ ...harness.cfg, agents })
+    assert.ok(!fresh.has(main.session.id))
+    const sessions = await fresh.store.listSessions()
+    assert.equal(sessions[0]?.id, main.session.id)
+    const live = await fresh.resume(main.session.id)
+    assert.equal(live.messages.length, 2)
+    const outcome = await fresh.send(main.session.id, "two")
+    assert.equal(outcome.tag, "completed")
+    assert.equal(outcome.tag === "completed" && outcome.text, "second")
+    assert.ok(existsSync(join(dir, ".hahaness", "sessions", `${main.session.id}.jsonl`)))
   } finally {
     await cleanup()
   }

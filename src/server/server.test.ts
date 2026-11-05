@@ -144,7 +144,7 @@ test("mcp: add stdio server, tools registered as <server>_<tool>, model can call
   })
   assert.equal(status, 200, JSON.stringify(data))
   assert.equal(data.state, "connected", data.error)
-  assert.deepEqual(data.tools.map((t) => t.toolName), ["echo_test_echo"])
+  assert.deepEqual(data.tools.map((t) => t.toolName), ["echo-test_echo"])
 
   const { data: s } = await send<{ session: { id: string } }>("POST", "/api/sessions", { agent: "cto" })
   const done = waitEvent((ev) => ev.type === "turn" && ev.sessionID === s.session.id && ev.running === false)
@@ -152,7 +152,7 @@ test("mcp: add stdio server, tools registered as <server>_<tool>, model can call
   await done
   const d = await get<{ messages: Array<{ parts: Array<{ type: string; name?: string; output?: string; text?: string }> }> }>(`/api/sessions/${s.session.id}`)
   const result = d.messages.flatMap((m) => m.parts).find((p) => p.type === "tool-result")
-  assert.equal(result?.name, "echo_test_echo")
+  assert.equal(result?.name, "echo-test_echo")
   assert.equal(result?.output, "echo: hi")
   const final = d.messages.at(-1)!.parts.map((p) => p.text ?? "").join("")
   assert.equal(final, "tool said: echo: hi")
