@@ -84,7 +84,7 @@ interface Estimate { measured: number; estimated: number }
 
 Trigger khi `total >= ceiling` (kiểm tra đầu mỗi step), hoặc provider báo overflow. (`/compact [focus]` thủ công: chưa làm.)
 
-Cấu hình (`hahaness.json` / bảng `settings`):
+Cấu hình (bảng `settings`, key `config`; sửa ở trang Cài đặt):
 
 ```json
 { "compaction": { "model": "proxy/gemini-2.5-flash", "memoryFlush": true } }

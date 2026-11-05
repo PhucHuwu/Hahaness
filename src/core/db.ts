@@ -72,15 +72,12 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 /** Một file SQLite chứa toàn bộ công ty. `:memory:` cho test. */
 export class Db {
   readonly sql: DatabaseSyncType
-  /** true nếu file vừa được tạo (dùng để import workspace kiểu cũ một lần). */
-  readonly fresh: boolean
 
   constructor(readonly path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true })
     this.sql = new DatabaseSync(path)
     this.sql.exec("PRAGMA busy_timeout = 5000")
     const version = Number((this.sql.prepare("PRAGMA user_version").get() as { user_version: number }).user_version)
-    this.fresh = version === 0
     if (version < SCHEMA_VERSION) {
       this.sql.exec(SCHEMA)
       this.sql.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)

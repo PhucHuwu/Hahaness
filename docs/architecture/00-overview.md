@@ -52,7 +52,7 @@ Direct mode vẫn spawn từ session CTO nên CTO thấy kết quả ở lượt
 
 ```
 src/
-  core/        types, inbox, loop (runTurn/runStep), db (SQLite), store (event log), migrate (nhập bố cục cũ)
+  core/        types, inbox, loop (runTurn/runStep), db (SQLite), store (event log)
   provider/    ProviderClient, registry (provider/model), openai-compatible
   config.ts    config trong DB, {env:VAR}, custom provider module
   tool/        define, registry, execute pipeline, output truncation

@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -17,7 +17,6 @@ import { knowledgeTool, manageSkillTool, staffTool } from "./tool/builtin/manage
 import { SkillStore } from "./context/skills.ts"
 import { DocumentStore } from "./context/documents.ts"
 import { Db } from "./core/db.ts"
-import { importLegacy } from "./core/migrate.ts"
 import * as workspace from "./context/workspace.ts"
 import type { ModelRequest, ProviderClient, StreamEvent } from "./provider/types.ts"
 import { evaluate, denied } from "./permission/ruleset.ts"
@@ -505,40 +504,6 @@ test("documents: path normalization, children, Vietnamese-safe search", () => {
   } finally {
     db.close()
   }
-})
-
-test("importLegacy: old folder layout moves into the DB once", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "hahaness-legacy-"))
-  const db = new Db(join(dir, "data", "x.db"))
-  try {
-    assert.ok(db.fresh)
-    await writeFile(join(dir, "COMPANY.md"), "# Acme\nWe sell rockets.")
-    await mkdir(join(dir, "knowledge", "sub"), { recursive: true })
-    await writeFile(join(dir, "knowledge", "sub", "faq.md"), "# FAQ")
-    await mkdir(join(dir, "staff"))
-    await writeFile(join(dir, "staff", "seo.md"), "---\nid: seo\nname: SEO\ndescription: d\n---\nDo SEO.")
-    await mkdir(join(dir, "skills", "brief"), { recursive: true })
-    await writeFile(join(dir, "skills", "brief", "SKILL.md"), "---\nname: Brief\ndescription: Use for briefs\n---\nSteps.")
-    await mkdir(join(dir, ".hahaness", "sessions"), { recursive: true })
-    await writeFile(join(dir, ".hahaness", "mcp.json"), JSON.stringify({ servers: { fs: { type: "stdio", command: "x" } } }))
-    const session = { id: "ses_old", agent: "cto", model: "m", title: "Old", createdAt: 1 }
-    await writeFile(join(dir, ".hahaness", "sessions", "ses_old.jsonl"), JSON.stringify({ kind: "session", session }) + "\n")
-    const docs = new DocumentStore(db)
-    const imported = await importLegacy(dir, db, docs)
-    assert.ok(imported.includes("knowledge/sub/faq.md"))
-    assert.match(docs.read("COMPANY.md")!, /rockets/)
-    assert.equal(new AgentRegistry().useDb(db).get("seo").system, "Do SEO.")
-    assert.equal((await new SkillStore(db).list())[0]?.description, "Use for briefs")
-    assert.equal((db.sql.prepare("SELECT count(*) n FROM mcp_servers").get() as { n: number }).n, 1)
-    const { SessionStore } = await import("./core/store.ts")
-    assert.equal((await new SessionStore(db).listSessions())[0]?.title, "Old")
-  } finally {
-    db.close()
-    await rm(dir, { recursive: true, force: true })
-  }
-  const again = new Db(":memory:")
-  assert.ok(again.fresh)
-  again.close()
 })
 
 test("agent markdown frontmatter parses rules and model list", () => {

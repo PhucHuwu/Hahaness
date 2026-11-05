@@ -1,7 +1,5 @@
-import { readFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
-import { homedir } from "node:os"
-import { isAbsolute, join, resolve } from "node:path"
+import { isAbsolute, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
 import { OpenAIProvider } from "./provider/openai.ts"
@@ -70,8 +68,6 @@ export type CompactionConfig = NonNullable<z.infer<typeof ConfigSchema>["compact
 export type Config = z.infer<typeof ConfigSchema>
 export type ProviderConfig = z.infer<typeof ProviderSchema>
 
-export const CONFIG_FILES = ["hahaness.json", join(".hahaness", "config.json")]
-
 /** `{env:NAME}` → process.env.NAME; chuỗi khác giữ nguyên. */
 export function expandEnv(value: string | undefined): string | undefined {
   if (!value) return value
@@ -81,36 +77,7 @@ export function expandEnv(value: string | undefined): string | undefined {
 /** Key trong bảng `settings`. */
 export const CONFIG_KEY = "config"
 
-/**
- * Cấu hình workspace nằm trong DB (CEO sửa ở trang Cài đặt). Lần đầu mở DB,
- * `hahaness.json` / `.hahaness/config.json` nếu có được nhập vào DB một lần.
- * `~/.hahaness/config.json` là mặc định cấp máy; DB thắng, providers merge theo id.
- */
-export async function loadConfig(cwd: string, db?: Db): Promise<{ config: Config; imported?: string }> {
-  let stored = db?.getSetting<unknown>(CONFIG_KEY)
-  let imported: string | undefined
-  if (stored === undefined) {
-    imported = CONFIG_FILES.map((f) => join(cwd, f)).find((p) => existsSync(p))
-    if (imported) {
-      stored = ConfigSchema.parse(JSON.parse(await readFile(imported, "utf8")))
-      db?.setSetting(CONFIG_KEY, stored)
-    }
-  }
-  const home = join(homedir(), ".hahaness", "config.json")
-  const base = existsSync(home) ? ConfigSchema.parse(JSON.parse(await readFile(home, "utf8"))) : undefined
-  const local = stored !== undefined ? ConfigSchema.parse(stored) : undefined
-  return {
-    config: {
-      defaultModel: local?.defaultModel ?? base?.defaultModel,
-      fallbackModels: local?.fallbackModels ?? base?.fallbackModels,
-      providers: { ...base?.providers, ...local?.providers },
-      compaction: base?.compaction || local?.compaction ? { ...base?.compaction, ...local?.compaction } : undefined,
-    },
-    imported,
-  }
-}
-
-/** Phần cấu hình riêng của workspace (không gồm ~/.hahaness), để UI sửa. */
+/** Cấu hình chỉ nằm trong DB (CEO sửa ở trang Cài đặt); không đọc file cấu hình nào. */
 export function storedConfig(db: Db): Config {
   return ConfigSchema.parse(db.getSetting<unknown>(CONFIG_KEY) ?? {})
 }

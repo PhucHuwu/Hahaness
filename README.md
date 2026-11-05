@@ -15,8 +15,6 @@ Vào **Cài đặt** để khai báo provider/model (hoặc đặt `OPENAI_API_K
 
 Toàn bộ công ty — hội thoại, nhân viên, tri thức, kỹ năng, kết quả, cấu hình — nằm trong **một file** `.hahaness/hahaness.db` (SQLite) trong thư mục bạn đứng khi chạy lệnh. Backup hay chuyển máy chỉ cần copy file đó. Muốn đặt chỗ khác: `HAHANESS_DB=D:\cong-ty.db npm run ui`.
 
-Nếu thư mục có workspace kiểu cũ (`COMPANY.md`, `staff/`, `skills/`, `hahaness.json`…), lần đầu chạy sẽ nhập vào DB; file gốc giữ nguyên.
-
 Bạn không cần sửa file nào. Cứ nói với CTO:
 
 ```
@@ -54,4 +52,4 @@ Server chỉ bind `127.0.0.1`, không có xác thực — dùng trên máy mình
 | [05-roadmap](docs/architecture/05-roadmap.md) | Lộ trình |
 | [06-providers](docs/architecture/06-providers.md) | Cấu hình provider, OpenAI-compatible, custom provider module |
 | [07-ui-server](docs/architecture/07-ui-server.md) | Giao diện web, API + SSE, knowledge/skills/results, MCP client, giới hạn |
-| [08-storage](docs/architecture/08-storage.md) | Một file SQLite, schema, nhập bố cục cũ, tool quản trị của CTO |
+| [08-storage](docs/architecture/08-storage.md) | Một file SQLite, schema, tool quản trị của CTO |

@@ -3,10 +3,9 @@ import { fileURLToPath } from "node:url"
 import { Harness } from "./harness.ts"
 import { AgentRegistry } from "./agent/registry.ts"
 import { ToolRegistry } from "./tool/registry.ts"
-import { buildProviders, loadConfig, type Config } from "./config.ts"
+import { buildProviders, storedConfig, type Config } from "./config.ts"
 import { ProviderRegistry } from "./provider/registry.ts"
 import { Db } from "./core/db.ts"
-import { importLegacy } from "./core/migrate.ts"
 import { DocumentStore } from "./context/documents.ts"
 import { SkillStore } from "./context/skills.ts"
 import { McpManager } from "./mcp/manager.ts"
@@ -33,8 +32,6 @@ export interface App {
   config: Config
   /** Lỗi khi dựng provider (vd thiếu API key) — UI hiển thị thay vì thoát. */
   providerError?: string
-  /** Mục đã nhập từ workspace dạng file cũ trong lần chạy này. */
-  imported: string[]
   agents: AgentRegistry
   tools: ToolRegistry
   skills: SkillStore
@@ -63,10 +60,9 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
   const { cwd } = opts
   const db = new Db(opts.dbPath ?? defaultDbPath(cwd))
   const docs = new DocumentStore(db)
-  const imported = db.fresh && opts.dbPath !== ":memory:" ? await importLegacy(cwd, db, docs) : []
   workspace.ensure(docs)
 
-  const { config } = await loadConfig(cwd, db)
+  const config = storedConfig(db)
   let providers = new ProviderRegistry()
   let providerError: string | undefined
   try {
@@ -118,5 +114,5 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
     mcp.closeAll()
     db.close()
   }
-  return { cwd, db, docs, config, providerError, imported, agents, tools, skills, mcp, harness, close }
+  return { cwd, db, docs, config, providerError, agents, tools, skills, mcp, harness, close }
 }

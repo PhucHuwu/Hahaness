@@ -5,7 +5,7 @@
 - [x] Loop: runTurn/runStep, stream, tool song song, Outcome, doom-loop guard cơ bản
 - [x] Inbox queue/steer; event store (JSONL, nay là SQLite); claim/release
 - [x] Tool.define + registry + truncate; permission ruleset + ask gate
-- [x] Provider registry `provider/model`, OpenAI-compatible, custom module, `hahaness.json`
+- [x] Provider registry `provider/model`, OpenAI-compatible, custom module, config (nay trong DB)
 - [x] Context: system tiers, workspace COMPANY/USER/MEMORY, budget, compaction cơ bản
 - [x] Vai: cto, researcher, writer, marketer, analyst; `hire` runtime → `staff/*.md`
 - [x] `delegate` fg/bg, ResultEntry, fork context; `memory`; `websearch`/`webfetch`
@@ -19,7 +19,7 @@
 - [x] Knowledge: `knowledge/` index Tier B, editor COMPANY/USER/MEMORY, xem deliverables
 - [x] Quản lý nhân viên từ UI: tuyển / sửa markdown / cho nghỉ (không đụng CTO)
 - [x] MCP client stdio + streamable HTTP, `.hahaness/mcp.json`, bật/tắt từ UI
-- [x] Settings: providers/model trong `hahaness.json`, gọi thử, reconfigure không restart
+- [x] Settings: providers/model trong DB (`settings.config`), gọi thử, reconfigure không restart
 - [x] `question` + permission ask trả lời trong chat
 - [x] Lưu trữ một file SQLite (`node:sqlite`): phiên, tài liệu, nhân viên, kỹ năng, config, MCP; nhập bố cục thư mục cũ một lần — xem `08-storage.md`
 - [x] CTO tự quản lý công ty bằng tool: `knowledge`, `manage_skill`, `staff`, `mcp_manage` (add cần CEO duyệt); tool `search`

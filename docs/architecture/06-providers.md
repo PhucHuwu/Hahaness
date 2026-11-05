@@ -22,7 +22,7 @@ Agent khai báo `model: [a/x, b/y]` là danh sách dự phòng. Config công ty 
 
 ## Config
 
-Lưu trong DB (bảng `settings`, key `config`; xem `08-storage.md`), CEO sửa ở trang **Cài đặt**. `~/.hahaness/config.json` (nếu có) là nền cấp máy: DB thắng, `providers` merge theo id. Lần đầu (chưa có setting), `./hahaness.json` hoặc `./.hahaness/config.json` được nhập vào DB một lần — tiện cho test/CI. Cùng một hình dạng JSON:
+Lưu trong DB (bảng `settings`, key `config`; xem `08-storage.md`), CEO sửa ở trang **Cài đặt**. Đây là nguồn cấu hình duy nhất: không đọc file cấu hình nào (`hahaness.json`, `~/.hahaness/config.json` đã bỏ). Test seed bằng `saveConfig(db, …)`. Hình dạng JSON:
 
 ```json
 {

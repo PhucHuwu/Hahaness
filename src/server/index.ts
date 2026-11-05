@@ -119,6 +119,5 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const { url, hasUI, app } = await startServer({ cwd: process.cwd(), port: Number(process.env.PORT ?? 7331) })
   console.log(`Hahaness server: ${url}${hasUI ? "" : "  (API only — run \`npm run ui\` for the interface)"}`)
   console.log(`Company data: ${app.db.path}`)
-  if (app.imported.length) console.log(`Imported from the old folder layout: ${app.imported.join(", ")}`)
   if (app.providerError) console.log(`Provider: ${app.providerError} — configure in Settings.`)
 }

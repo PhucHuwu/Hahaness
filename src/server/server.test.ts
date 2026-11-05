@@ -1,11 +1,13 @@
 import { test, before, after } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { startServer } from "./index.ts"
 import type { App } from "../bootstrap.ts"
+import { Db } from "../core/db.ts"
+import { saveConfig } from "../config.ts"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
 let dir: string
@@ -15,11 +17,11 @@ let close: () => Promise<void>
 
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), "hahaness-server-"))
-  await writeFile(
-    join(dir, "hahaness.json"),
-    JSON.stringify({ defaultModel: "scripted/any", providers: { scripted: { type: "custom", module: join(root, "examples", "providers", "scripted.ts") } } }),
-  )
-  const s = await startServer({ cwd: dir, dbPath: join(dir, "data", "company.db"), port: 0, uiDir: join(dir, "no-ui") })
+  const dbPath = join(dir, "data", "company.db")
+  const seed = new Db(dbPath)
+  saveConfig(seed, { defaultModel: "scripted/any", providers: { scripted: { type: "custom", module: join(root, "examples", "providers", "scripted.ts") } } })
+  seed.close()
+  const s = await startServer({ cwd: dir, dbPath, port: 0, uiDir: join(dir, "no-ui") })
   base = `http://127.0.0.1:${(s.server.address() as { port: number }).port}`
   app = s.app
   close = s.close
@@ -66,7 +68,7 @@ async function waitEvent(pred: (ev: any) => boolean, ms = 10_000): Promise<any> 
   }
 }
 
-test("health + config: hahaness.json is imported into the DB on first run", async () => {
+test("health + config: providers come from the DB settings", async () => {
   const h = await get<{ ok: boolean; providerError: string | null; db: string }>("/api/health")
   assert.equal(h.ok, true)
   assert.equal(h.providerError, null)

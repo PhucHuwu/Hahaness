@@ -15,7 +15,7 @@ Người dùng là CEO no-code: họ **không tự làm gì**, chỉ ra lệnh c
 - Node 22 in `ExperimentalWarning` khi load; `src/core/db.ts` lọc **đúng warning đó** trong lúc `createRequire("node:sqlite")`, rồi trả lại `process.emitWarning` gốc.
 - API đồng bộ: hợp với workload nhỏ (một công ty, vài nghìn tài liệu). `SessionStore`/`SkillStore` giữ chữ ký `async` để không đổi caller.
 - Bản build hiện tại **không có FTS5** → `DocumentStore.search` lọc trong JS bằng `toLocaleLowerCase` (đúng với tiếng Việt; `LIKE`/`lower()` của SQLite chỉ xử lý ASCII).
-- Version schema bằng `PRAGMA user_version`; `Db.fresh` = file vừa tạo.
+- Version schema bằng `PRAGMA user_version`.
 
 ## Schema (v1)
 
@@ -39,11 +39,11 @@ Vai builtin vẫn là file trong `src/agent/builtin/*.md` (là code, không ph�
 
 ### Config
 
-`settings.config` thắng; `~/.hahaness/config.json` là nền cấp máy (providers merge theo id). API key không bao giờ trả ra UI (`••••`; gửi lại `••••` = giữ key cũ).
+`settings.config` là nguồn cấu hình duy nhất; không đọc file cấu hình nào. API key không bao giờ trả ra UI (`••••`; gửi lại `••••` = giữ key cũ).
 
-## Nhập từ bố cục cũ
+## Không còn bố cục file
 
-Khi `Db.fresh` (lần đầu tạo file, không áp dụng `:memory:`), `importLegacy(cwd)` nhập một lần: COMPANY/USER/MEMORY.md, `knowledge|drafts|deliverables/**` (.md/.txt/.csv/.json/.html), `staff/*.md`, `skills/*/SKILL.md`, `.hahaness/mcp.json`, `.hahaness/sessions/*.jsonl`. `hahaness.json`/`.hahaness/config.json` nhập qua `loadConfig` khi chưa có setting. **Không xóa file gốc.** Sau đó DB là nguồn sự thật duy nhất.
+Bản đầu lưu workspace thành file (cột "Thay cho" ở trên). Bước nhập một lần (`importLegacy`) và file `hahaness.json` đã bỏ: DB là nguồn sự thật duy nhất. DB mới → `workspace.ensure()` tạo mẫu COMPANY/USER/MEMORY trong bảng `documents`.
 
 ## CTO quản lý công ty bằng tool
 
