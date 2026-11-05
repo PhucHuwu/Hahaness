@@ -8,11 +8,12 @@ Thiết kế rút từ nghiên cứu [hermes-agent](docs/research/01-hermes-agen
 
 ```sh
 npm install
-set OPENAI_API_KEY=...            # hoặc HAHANESS_API_KEY
-set OPENAI_BASE_URL=...           # tùy chọn, gateway OpenAI-compatible
-set HAHANESS_MODEL=gpt-4.1        # tùy chọn
+copy hahaness.example.json hahaness.json   # khai báo providers, xem docs/architecture/06-providers.md
+set OPENAI_API_KEY=...
 npm run dev
 ```
+
+Không có `hahaness.json` thì dùng `OPENAI_API_KEY` + `OPENAI_BASE_URL` từ env. Model ghi dạng `provider/model`; provider `type: "openai"` nối được mọi endpoint OpenAI-compatible (OpenRouter, Ollama, vLLM, LiteLLM…), `type: "custom"` trỏ tới module TS của bạn (mẫu: `examples/providers/echo.ts`).
 
 ```
 CEO> tìm xem hàm parseFrontmatter dùng ở đâu
@@ -37,13 +38,15 @@ npm run typecheck
 | [03-context-engineering](docs/architecture/03-context-engineering.md) | System tiers, instruction discovery, budget, compaction 4 pha, memory, skills, context cho subagent |
 | [04-multi-agent](docs/architecture/04-multi-agent.md) | Agent markdown, tool `delegate`, ResultEntry, isolation, direct mode |
 | [05-roadmap](docs/architecture/05-roadmap.md) | v0.1 → v0.3 và câu hỏi mở |
+| [06-providers](docs/architecture/06-providers.md) | `ProviderClient` interface, `hahaness.json`, custom provider module |
 
 ## Mã nguồn (v0.1)
 
 ```
 src/
   core/      types, inbox, loop (runTurn/runStep), store (JSONL)
-  provider/  ProviderClient interface, OpenAI-compatible streaming
+  provider/  ProviderClient interface, registry (provider/model), OpenAI-compatible streaming
+  config.ts  hahaness.json loader, {env:VAR} expansion, custom provider import
   tool/      define, registry, execute pipeline, output truncation, builtin/
   context/   system tiers, AGENTS.md discovery, token budget, compaction
   permission/ ruleset (last-match-wins), ask gate

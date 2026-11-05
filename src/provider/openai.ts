@@ -4,6 +4,7 @@ import type { ModelInfo, ModelRequest, ProviderClient, StreamEvent } from "./typ
 export interface OpenAIConfig {
   baseURL?: string
   apiKey: string
+  headers?: Record<string, string>
   models?: Record<string, Partial<ModelInfo>>
 }
 
@@ -44,7 +45,7 @@ export class OpenAIProvider implements ProviderClient {
     try {
       res = await fetch(`${this.baseURL}/chat/completions`, {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${this.cfg.apiKey}` },
+        headers: { "content-type": "application/json", authorization: `Bearer ${this.cfg.apiKey}`, ...this.cfg.headers },
         body: JSON.stringify(body),
         signal,
       })

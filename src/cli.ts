@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url"
 import { Harness } from "./harness.ts"
 import { AgentRegistry } from "./agent/registry.ts"
 import { ToolRegistry } from "./tool/registry.ts"
-import { OpenAIProvider } from "./provider/openai.ts"
+import { buildProviders, loadConfig } from "./config.ts"
 import { read, write, edit } from "./tool/builtin/fs.ts"
 import { glob, grep } from "./tool/builtin/search.ts"
 import { shell } from "./tool/builtin/shell.ts"
@@ -17,13 +17,16 @@ const here = dirname(fileURLToPath(import.meta.url))
 const cwd = process.cwd()
 const rl = createInterface({ input: stdin, output: stdout })
 
-const apiKey = process.env.OPENAI_API_KEY ?? process.env.HAHANESS_API_KEY
-if (!apiKey) {
-  console.error("Set OPENAI_API_KEY (or HAHANESS_API_KEY). Optional: OPENAI_BASE_URL, HAHANESS_MODEL.")
+const { config, path: configPath } = await loadConfig(cwd)
+let providers
+try {
+  providers = await buildProviders(config, cwd)
+} catch (e) {
+  console.error((e as Error).message)
+  console.error("See docs/architecture/06-providers.md for hahaness.json format.")
   process.exit(1)
 }
-const provider = new OpenAIProvider({ apiKey, baseURL: process.env.OPENAI_BASE_URL })
-const defaultModel = process.env.HAHANESS_MODEL ?? "gpt-4.1"
+const defaultModel = process.env.HAHANESS_MODEL ?? config.defaultModel ?? "gpt-4.1"
 
 const agents = await new AgentRegistry().load(join(here, "agent", "builtin"), join(cwd, "agents"))
 const tools = new ToolRegistry().register(
@@ -38,7 +41,7 @@ const tools = new ToolRegistry().register(
 const harness = new Harness({
   cwd,
   dataDir: join(cwd, ".hahaness"),
-  provider,
+  providers,
   defaultModel,
   agents,
   tools,
@@ -67,6 +70,7 @@ function label(sessionID: string) {
 
 const main = await harness.createSession({ agent: "cto", title: "main" })
 console.log(`Hahaness — you are the CEO. Talking to: ${main.agent.name} (${main.session.model})`)
+console.log(`Providers: ${providers.ids().join(", ")}${configPath ? ` from ${configPath}` : " (from env)"}`)
 console.log(`Commands: @<agent> <task> (direct), /sessions, /steer <id> <msg>, /stop <id>, /quit\n`)
 
 while (true) {

@@ -13,6 +13,8 @@ import { delegate } from "./tool/builtin/delegate.ts"
 import type { ModelRequest, ProviderClient, StreamEvent } from "./provider/types.ts"
 import { evaluate, denied } from "./permission/ruleset.ts"
 import { fromMarkdown } from "./agent/registry.ts"
+import { ProviderRegistry } from "./provider/registry.ts"
+import { buildProviders, expandEnv } from "./config.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -47,8 +49,8 @@ async function setup(provider: ProviderClient) {
   const harness = new Harness({
     cwd: dir,
     dataDir: join(dir, ".hahaness"),
-    provider,
-    defaultModel: "mock",
+    providers: new ProviderRegistry().register("mock", provider),
+    defaultModel: "mock/mock",
     agents,
     tools,
     askHandler: async () => ({ kind: "once" }),
@@ -177,6 +179,41 @@ test("permission: last match wins, deny never overridden", () => {
   assert.equal(evaluate(rules, "shell", "git push origin"), "deny")
   assert.equal(evaluate(rules, "read", "a.ts"), "ask")
   assert.ok(denied([...rules, { action: "shell", resource: "*", effect: "allow" }], "shell", "git push"))
+})
+
+test("provider registry resolves provider/model refs and defaults", () => {
+  const a = scripted([])
+  const b = scripted([])
+  const reg = new ProviderRegistry().register("a", a).register("b", b, { default: true })
+  assert.equal(reg.resolve("a/x").client, a)
+  assert.equal(reg.resolve("a/x").model, "x")
+  assert.equal(reg.resolve("b/org/model").model, "org/model")
+  assert.equal(reg.resolve("plain").client, b)
+  assert.throws(() => new ProviderRegistry().resolve("x"), /no provider/)
+})
+
+test("config: custom provider module and env expansion", async () => {
+  process.env.HAHA_TEST_KEY = "secret"
+  assert.equal(expandEnv("{env:HAHA_TEST_KEY}"), "secret")
+  assert.equal(expandEnv("Bearer {env:HAHA_TEST_KEY}"), "Bearer secret")
+  const reg = await buildProviders(
+    {
+      defaultModel: "echo/any",
+      providers: {
+        echo: { type: "custom", module: join(here, "..", "examples", "providers", "echo.ts"), options: { reply: "pong" } },
+        oa: { type: "openai", apiKey: "{env:HAHA_TEST_KEY}", baseURL: "http://localhost:1/v1" },
+      },
+    },
+    here,
+  )
+  assert.deepEqual(reg.ids().sort(), ["echo", "oa"])
+  const r = reg.resolve("whatever")
+  assert.equal(r.providerID, "echo")
+  const events: string[] = []
+  for await (const ev of r.client.stream({ model: "any", system: [], messages: [], tools: [] }, new AbortController().signal)) {
+    if (ev.type === "text-delta") events.push(ev.text)
+  }
+  assert.deepEqual(events, ["pong"])
 })
 
 test("agent markdown frontmatter parses rules and model list", () => {

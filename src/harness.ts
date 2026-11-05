@@ -11,7 +11,7 @@ import { discover, environment, type InstructionSource } from "./context/instruc
 import { estimateMessage } from "./context/budget.ts"
 import { AskGate, type AskHandler } from "./permission/ask.ts"
 import { inherit, type Ruleset } from "./permission/ruleset.ts"
-import type { ProviderClient } from "./provider/types.ts"
+import type { ProviderRegistry } from "./provider/registry.ts"
 import type { ToolRegistry } from "./tool/registry.ts"
 import { makeAsk } from "./tool/execute.ts"
 import type { Tool } from "./tool/define.ts"
@@ -19,7 +19,8 @@ import type { Tool } from "./tool/define.ts"
 export interface HarnessConfig {
   cwd: string
   dataDir: string
-  provider: ProviderClient
+  providers: ProviderRegistry
+  /** Dạng `providerID/modelID`; agent không khai báo model thì dùng cái này. */
   defaultModel: string
   agents: AgentRegistry
   tools: ToolRegistry
@@ -61,11 +62,13 @@ export class Harness {
 
   async createSession(opts: { agent: string; parentID?: string; title?: string; model?: string; ruleset?: Ruleset; depth?: number; extraTools?: Tool[] }): Promise<Live> {
     const agent = this.cfg.agents.get(opts.agent)
+    const modelRef = opts.model ?? agent.model[0] ?? this.cfg.defaultModel
+    this.cfg.providers.resolve(modelRef)
     const session: Session = {
       id: id("ses"),
       parentID: opts.parentID,
       agent: agent.id,
-      model: opts.model ?? agent.model[0] ?? this.cfg.defaultModel,
+      model: modelRef,
       title: opts.title ?? agent.name,
       createdAt: Date.now(),
     }
@@ -120,11 +123,12 @@ export class Harness {
       harness: this,
     }
     const { tools } = this.cfg.tools.snapshot(live.ruleset)
+    const resolved = this.cfg.providers.resolve(live.session.model)
     const ctx: TurnContext = {
       sessionID: live.session.id,
       agent: live.agent,
-      model: live.session.model,
-      provider: this.cfg.provider,
+      model: resolved.model,
+      provider: resolved.client,
       system: live.system,
       tools: [...tools, ...live.extraTools],
       toolContext: { ...toolContextBase, ask: makeAsk({ ...toolContextBase, signal: live.abort.signal }, live.saved) },

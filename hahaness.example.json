@@ -1,0 +1,34 @@
+{
+  "defaultModel": "openai/gpt-4.1",
+  "providers": {
+    "openai": {
+      "type": "openai",
+      "apiKey": "{env:OPENAI_API_KEY}",
+      "models": {
+        "gpt-4.1": { "contextWindow": 1000000, "maxOutput": 32768 }
+      }
+    },
+    "openrouter": {
+      "type": "openai",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "apiKey": "{env:OPENROUTER_API_KEY}",
+      "headers": { "HTTP-Referer": "https://github.com/your/hahaness", "X-Title": "Hahaness" },
+      "models": {
+        "anthropic/claude-sonnet-4.5": { "contextWindow": 200000, "maxOutput": 64000 }
+      }
+    },
+    "ollama": {
+      "type": "openai",
+      "baseURL": "http://localhost:11434/v1",
+      "apiKey": "ollama",
+      "models": {
+        "qwen3:32b": { "contextWindow": 32768, "maxOutput": 8192 }
+      }
+    },
+    "echo": {
+      "type": "custom",
+      "module": "examples/providers/echo.ts",
+      "options": { "reply": "pong" }
+    }
+  }
+}
