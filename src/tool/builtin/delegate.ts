@@ -60,7 +60,8 @@ If no employee fits, use \`hire\` first.`,
         }
         case "steer": {
           if (!input.sessionID || !input.message) return { output: "steer requires sessionID and message", isError: true }
-          void harness.send(input.sessionID, input.message, "steer")
+          if (!harness.has(input.sessionID)) return { output: `No live session ${input.sessionID}`, isError: true }
+          void harness.send(input.sessionID, input.message, "steer", ctx.agent)
           return { output: `Message sent to ${input.sessionID}` }
         }
         case "stop": {

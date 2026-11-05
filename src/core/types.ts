@@ -12,8 +12,10 @@ export interface Message {
   role: Role
   parts: Part[]
   createdAt: number
-  /** Người tạo message: user thật, subagent trả kết quả, hay harness. */
-  source?: "user" | "subagent" | "system"
+  /** Người tạo message: CEO, agent khác (brief/steer), subagent trả kết quả, hay harness. */
+  source?: "user" | "agent" | "subagent" | "system"
+  /** Ai gửi: `ceo` hoặc id agent. Có khi message đến từ người khác ngoài harness. */
+  from?: string
 }
 
 export interface Usage {

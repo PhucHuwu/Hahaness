@@ -50,6 +50,8 @@ interface Live {
   depth: number
   abort: AbortController
   running?: Promise<Outcome>
+  /** Lỗi của lượt gần nhất (xóa khi lượt mới bắt đầu) để UI hiện lại sau khi tải lại trang. */
+  lastError?: string
   /** Tool riêng cho session (vd delegate bind vào parent). */
   extraTools: Tool[]
 }
@@ -108,7 +110,7 @@ export class Harness {
       estimate: { measured: 0, estimated: 0 },
       system: buildSystem({ agent, instructions, skillsIndex: await this.cfg.skills?.index() }),
       instructions,
-      ruleset: [...(this.cfg.permissions ?? []), ...agent.permissions, ...(opts.ruleset ?? [])],
+      ruleset: [...(this.cfg.permissions ?? []), ...agent.permissions, ...(opts.ruleset ?? []), ...employeeRules(agent, session)],
       saved: new Set(),
       depth: opts.depth ?? 0,
       abort: new AbortController(),
@@ -134,10 +136,13 @@ export class Harness {
     return [...this.live.values()]
   }
 
-  /** Đẩy message vào inbox; nếu session đang idle thì chạy turn mới. */
-  send(sessionID: string, text: string, delivery: "queue" | "steer" = "steer"): Promise<Outcome> {
+  /**
+   * Đẩy message vào inbox; nếu session đang idle thì chạy turn mới.
+   * `from`: "ceo" (mặc định) hoặc id agent gửi (vd CTO steer nhân viên) — chỉ là metadata cho UI.
+   */
+  send(sessionID: string, text: string, delivery: "queue" | "steer" = "steer", from = "ceo"): Promise<Outcome> {
     const live = this.get(sessionID)
-    const msg: Message = { id: id("msg"), role: "user", source: "user", createdAt: Date.now(), parts: [{ type: "text", text }] }
+    const msg: Message = { id: id("msg"), role: "user", source: from === "ceo" ? "user" : "agent", from, createdAt: Date.now(), parts: [{ type: "text", text }] }
     live.inbox.push(live.running ? delivery : "queue", msg)
     return this.wake(live)
   }
@@ -172,12 +177,14 @@ export class Harness {
       events: this.cfg.events,
       signal: live.abort.signal,
     }
+    live.lastError = undefined
     this.cfg.events.onTurnStart?.(live.session.id)
     live.running = runTurn(ctx)
       .then(async (outcome) => {
         live.estimate = ctx.estimate
         live.compaction = ctx.compactionSummary
         live.running = undefined
+        if (outcome.tag === "failed") live.lastError = outcome.error.message
         if (live.inbox.size > 0) return this.wake(live)
         this.cfg.events.onTurnEnd?.(live.session.id, outcome)
         return outcome
@@ -185,6 +192,7 @@ export class Harness {
       .catch((e) => {
         live.running = undefined
         const outcome = { tag: "failed", error: e as Error } as Outcome
+        live.lastError = (e as Error).message
         this.cfg.events.onTurnEnd?.(live.session.id, outcome)
         return outcome
       })
@@ -206,7 +214,7 @@ export class Harness {
    * `wakeParent: false` (direct mode từ UI): kết quả vẫn vào inbox CTO nhưng
    * không đánh thức — CTO thấy ở lượt sau thay vì tự trả lời CEO.
    */
-  async spawn(parentID: string, opts: { agent: string; brief: Brief; context?: "isolated" | "fork"; background?: boolean; wakeParent?: boolean; model?: string }) {
+  async spawn(parentID: string, opts: { agent: string; brief: Brief; context?: "isolated" | "fork"; background?: boolean; wakeParent?: boolean; model?: string; from?: string }) {
     const parent = this.get(parentID)
     const maxDepth = this.cfg.maxDepth ?? 1
     if (parent.depth >= maxDepth) throw new Error(`delegate: max depth ${maxDepth} reached`)
@@ -231,7 +239,8 @@ export class Harness {
     child.inbox.push("queue", {
       id: id("msg"),
       role: "user",
-      source: "system",
+      source: "agent",
+      from: opts.from ?? parent.agent.id,
       createdAt: Date.now(),
       parts: [{ type: "text", text: `You are a subagent spawned by another session.\n${forked}\n${renderBrief(opts.brief)}` }],
     })
@@ -247,6 +256,7 @@ export class Harness {
           id: id("msg"),
           role: "user",
           source: "subagent",
+          from: child.agent.id,
           createdAt: Date.now(),
           parts: [{ type: "text", text: renderResult(entry) }],
         })
@@ -274,6 +284,22 @@ export class Harness {
       usage: { steps, inputTokens: child.estimate.measured, outputTokens: child.messages.reduce((n, m) => (m.role === "assistant" ? n + estimateMessage(m) : n), 0) },
     }
   }
+}
+
+/**
+ * Nhân viên (mode khác primary) không bao giờ có tool quản lý, kể cả khi CEO chat thẳng
+ * (phiên gốc) hay khi phiên con được resume sau restart (lúc đó rule của spawn không còn).
+ * `question` chỉ cho phép ở phiên gốc vì CEO đang ngồi đó; `delegate` chỉ cho
+ * orchestrator được giao việc từ phiên cha.
+ */
+function employeeRules(agent: AgentDef, session: Session): Ruleset {
+  if (agent.mode === "primary") return []
+  const deny = (action: string) => ({ action, resource: "*", effect: "deny" as const })
+  return MANAGEMENT_ACTIONS.filter((a) => {
+    if (a === "question") return !!session.parentID
+    if (a === "delegate") return !session.parentID || agent.role === "leaf"
+    return true
+  }).map(deny)
 }
 
 export interface Brief {

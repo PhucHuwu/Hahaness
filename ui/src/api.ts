@@ -37,7 +37,19 @@ export interface Message {
   role: "system" | "user" | "assistant" | "tool"
   parts: Part[]
   createdAt: number
-  source?: "user" | "subagent" | "system"
+  source?: "user" | "agent" | "subagent" | "system"
+  from?: string
+}
+
+export interface CommItem {
+  at: number
+  kind: "brief" | "steer" | "ceo" | "report"
+  from: string
+  to: string
+  sessionID: string
+  parentID: string
+  text: string
+  status?: string
 }
 
 export interface Session {
@@ -54,6 +66,7 @@ export interface SessionView {
   running: boolean
   live: boolean
   depth: number
+  error?: string
 }
 
 export interface SessionDetail extends SessionView {

@@ -62,7 +62,7 @@ export function Settings() {
     let id = "openai"
     let n = 2
     while (config.providers[id]) id = `provider-${n++}`
-    setProvider(id, { type: "openai", apiKey: "{env:OPENAI_API_KEY}" })
+    setProvider(id, { type: "openai" })
   }
 
   const dirty = view && JSON.stringify(config) !== JSON.stringify(view.config)
@@ -137,7 +137,7 @@ function ProviderCard({ id, p, onChange, onRename, onRemove }: { id: string; p: 
       <div className="row between">
         <div className="row">
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} onBlur={() => onRename(name.trim())} style={{ width: 180 }} className="mono" />
-          <select value={p.type} onChange={(e) => onChange(e.target.value === "openai" ? { type: "openai", apiKey: "{env:OPENAI_API_KEY}" } : { type: "custom", module: "./examples/providers/echo.ts" })}>
+          <select value={p.type} onChange={(e) => onChange(e.target.value === "openai" ? { type: "openai" } : { type: "custom", module: "./examples/providers/echo.ts" })}>
             <option value="openai">OpenAI-compatible</option>
             <option value="custom">Custom module</option>
           </select>
@@ -153,8 +153,17 @@ function ProviderCard({ id, p, onChange, onRename, onRemove }: { id: string; p: 
             <input type="url" value={p.baseURL ?? ""} placeholder="https://api.openai.com/v1" onChange={(e) => onChange({ ...p, baseURL: e.target.value || undefined })} />
           </label>
           <label className="field">
-            API key — dán key thật, hoặc <code>{"{env:TÊN_BIẾN}"}</code> để đọc từ môi trường
-            <input type="text" className="mono" value={p.apiKey ?? ""} onChange={(e) => onChange({ ...p, apiKey: e.target.value || undefined })} />
+            API key — dán nguyên key (vd <code>sk-…</code>). Đã lưu thì hiện <code>••••</code>; dán key mới để thay.
+            <input
+              type="text"
+              className="mono"
+              value={p.apiKey ?? ""}
+              placeholder="sk-…"
+              autoComplete="off"
+              spellCheck={false}
+              onFocus={(e) => p.apiKey === "••••" && e.target.select()}
+              onChange={(e) => onChange({ ...p, apiKey: e.target.value.trim() || undefined })}
+            />
           </label>
         </>
       ) : (

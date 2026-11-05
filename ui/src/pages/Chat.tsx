@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { api, ApiError, type Message, type Part, type Question, type SessionDetail, type SessionView, type Staff } from "../api.ts"
 import { useServerEvents } from "../events.ts"
 import { applyEvent, userMessage, type ChatState } from "./chat-state.ts"
+import { Comms } from "./Comms.tsx"
 
 export function Chat({ sessionID }: { sessionID?: string }) {
   const [sessions, setSessions] = useState<SessionView[]>([])
@@ -26,12 +27,14 @@ export function Chat({ sessionID }: { sessionID?: string }) {
   })
 
   const roots = sessions.filter((s) => !s.session.parentID)
-  const current = sessionID ?? roots[0]?.session.id
+  const comms = sessionID === "comms"
+  const current = comms ? undefined : (sessionID ?? roots.find((s) => s.session.agent === "cto")?.session.id ?? roots[0]?.session.id)
+  const agentName = (id: string) => staff.find((s) => s.id === id)?.name ?? id
 
-  const create = async () => {
+  const create = async (agent: string) => {
     setCreating(true)
     try {
-      const s = await api.post<SessionView>("/api/sessions", { agent: "cto" })
+      const s = await api.post<SessionView>("/api/sessions", { agent, title: agent === "cto" ? undefined : "Trò chuyện riêng" })
       location.hash = `chat/${s.session.id}`
     } catch (e) {
       setError((e as Error).message)
@@ -40,44 +43,101 @@ export function Chat({ sessionID }: { sessionID?: string }) {
     }
   }
 
+  // CTO (và agent primary khác) trước, rồi từng nhân viên; nhân viên đã nghỉ nhưng còn phiên vẫn hiện.
+  const primary = staff.filter((s) => s.mode === "primary").map((s) => s.id)
+  const employees = staff.filter((s) => s.mode !== "primary").map((s) => s.id)
+  const known = new Set([...primary, ...employees])
+  const former = [...new Set(sessions.map((s) => s.session.agent))].filter((a) => !known.has(a))
+  const groups = [...(primary.length ? primary : ["cto"]), ...employees, ...former]
+
   return (
     <div className="chat">
       <aside className="chat-side">
-        <div className="head row between">
+        <div className="head">
           <h2>Phiên làm việc</h2>
-          <button className="btn small" onClick={create} disabled={creating}>
-            Mới
-          </button>
         </div>
         <div className="list">
           {error && <div className="notice err small">{error}</div>}
-          {!error && roots.length === 0 && <div className="empty small">Chưa có phiên nào.</div>}
-          {roots.map((s) => (
-            <button key={s.session.id} className={s.session.id === current ? "active" : undefined} onClick={() => (location.hash = `chat/${s.session.id}`)}>
-              <div className="title">
-                <span className={`dot ${s.running ? "on" : ""}`} />
-                {s.session.title}
-              </div>
-              <div className="sub">
-                {s.session.agent} · {new Date(s.session.createdAt).toLocaleString()}
-              </div>
-            </button>
+          <button className={comms ? "list-item active" : "list-item"} onClick={() => (location.hash = "chat/comms")}>
+            <div className="title">Giao tiếp giữa các agent</div>
+          </button>
+          {groups.map((agent) => (
+            <SideGroup
+              key={agent}
+              name={agentName(agent)}
+              isPrimary={primary.includes(agent) || agent === "cto"}
+              fired={!known.has(agent) && staff.length > 0}
+              sessions={sessions.filter((s) => s.session.agent === agent)}
+              current={current}
+              creating={creating}
+              onCreate={() => create(agent)}
+            />
           ))}
         </div>
       </aside>
-      {current ? (
+      {comms ? (
+        <Comms agentName={agentName} />
+      ) : current ? (
         <Conversation key={current} sessionID={current} staff={staff} />
       ) : (
         <div className="chat-main">
           <div className="empty" style={{ margin: "auto" }}>
             {error ? "Không kết nối được server." : "Bắt đầu một phiên mới để nói chuyện với CTO."}
             <div style={{ marginTop: 12 }}>
-              <button className="btn primary" onClick={create} disabled={creating || !!error}>
-                Phiên mới
+              <button className="btn primary" onClick={() => create("cto")} disabled={creating || !!error}>
+                Phiên mới với CTO
               </button>
             </div>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+const GROUP_LIMIT = 6
+
+function SideGroup(props: { name: string; isPrimary: boolean; fired: boolean; sessions: SessionView[]; current?: string; creating: boolean; onCreate: () => void }) {
+  const [all, setAll] = useState(false)
+  const { sessions } = props
+  const running = sessions.some((s) => s.running)
+  const shown = all ? sessions : sessions.slice(0, GROUP_LIMIT)
+  return (
+    <div className="side-group">
+      <div className="gh">
+        <span className={`dot ${running ? "on" : ""}`} />
+        <span className="name" title={props.name}>
+          {props.name}
+        </span>
+        {!props.fired && (
+          <button className="btn small" onClick={props.onCreate} disabled={props.creating} title={props.isPrimary ? "Phiên mới với CTO" : `Nhắn riêng với ${props.name}`}>
+            {props.isPrimary ? "Mới" : "Nhắn"}
+          </button>
+        )}
+      </div>
+      {props.fired && <div className="none">Đã nghỉ việc</div>}
+      {sessions.length === 0 && !props.fired && <div className="none">Chưa có phiên.</div>}
+      {shown.map((s) => (
+        <button
+          key={s.session.id}
+          className={`list-item ${s.session.parentID ? "child" : ""} ${s.session.id === props.current ? "active" : ""}`}
+          onClick={() => (location.hash = `chat/${s.session.id}`)}
+          title={s.session.title}
+        >
+          <div className="title">
+            <span className={`dot ${s.running ? "on" : ""}`} />
+            {s.session.parentID ? s.session.title : props.isPrimary ? s.session.title : "Trò chuyện riêng"}
+          </div>
+          <div className="sub">
+            {s.session.parentID ? "CTO giao · " : ""}
+            {new Date(s.session.createdAt).toLocaleString()}
+          </div>
+        </button>
+      ))}
+      {sessions.length > GROUP_LIMIT && (
+        <button className="link small" style={{ marginLeft: 10 }} onClick={() => setAll(!all)}>
+          {all ? "Thu gọn" : `Xem thêm ${sessions.length - GROUP_LIMIT}`}
+        </button>
       )}
     </div>
   )
@@ -96,7 +156,7 @@ function Conversation({ sessionID, staff }: { sessionID: string; staff: Staff[] 
     try {
       const [d, qs] = await Promise.all([api.get<SessionDetail>(`/api/sessions/${sessionID}`), api.get<Question[]>("/api/questions")])
       setDetail(d)
-      setState({ messages: d.messages, running: d.running, notices: [] })
+      setState({ messages: d.messages, running: d.running, notices: [], error: d.error })
       setQuestions(qs.filter((q) => q.sessionID === sessionID))
       setLoadError(undefined)
     } catch (e) {
@@ -123,11 +183,15 @@ function Conversation({ sessionID, staff }: { sessionID: string; staff: Staff[] 
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
   }, [state.messages, questions])
 
+  const me = detail ? staff.find((s) => s.id === detail.session.agent) : undefined
+  const isPrimary = !me || me.mode === "primary"
+  const myName = me?.name ?? detail?.session.agent ?? "CTO"
+
   const send = async () => {
     const t = text.trim()
     if (!t) return
     setSendError(undefined)
-    const direct = /^@([\w-]+)\s+([\s\S]+)$/.exec(t)
+    const direct = isPrimary ? /^@([\w-]+)\s+([\s\S]+)$/.exec(t) : null
     try {
       if (direct) {
         const [, agent, task] = direct
@@ -150,7 +214,7 @@ function Conversation({ sessionID, staff }: { sessionID: string; staff: Staff[] 
   const stop = () => api.post(`/api/sessions/${sessionID}/stop`).catch((e) => setSendError((e as Error).message))
   const answer = (q: Question, a: string) => api.post(`/api/questions/${q.id}`, { answer: a }).catch((e) => setSendError((e as Error).message))
 
-  const agentName = (id: string) => staff.find((s) => s.id === id)?.name ?? id
+  const agentName = (id: string) => (id === "ceo" ? "Bạn" : (staff.find((s) => s.id === id)?.name ?? id))
 
   if (loadError) return <div className="chat-main"><div className="notice err" style={{ margin: 20 }}>{loadError}</div></div>
   if (!detail) return <div className="chat-main"><div className="empty">Đang tải…</div></div>
@@ -161,11 +225,14 @@ function Conversation({ sessionID, staff }: { sessionID: string; staff: Staff[] 
         <div className="grow">
           {detail.session.parentID && (
             <a href={`#chat/${detail.session.parentID}`} className="small">
-              ← về CTO
+              ← về phiên giao việc
             </a>
           )}{" "}
-          <strong>{agentName(detail.session.agent)}</strong>
-          <span className="muted small"> · {detail.session.model}</span>
+          <strong>{myName}</strong>
+          <span className="muted small">
+            {" · "}
+            {[detail.session.parentID ? "được giao việc" : isPrimary ? undefined : "trò chuyện riêng với bạn", detail.session.model].filter(Boolean).join(" · ")}
+          </span>
         </div>
         {state.running ? (
           <>
@@ -179,13 +246,13 @@ function Conversation({ sessionID, staff }: { sessionID: string; staff: Staff[] 
         )}
       </div>
       <div className="chat-log" ref={logRef}>
-        {state.messages.length === 0 && <div className="empty">Chưa có tin nhắn. Hãy nói cho CTO biết bạn cần gì.</div>}
+        {state.messages.length === 0 && <div className="empty">Chưa có tin nhắn. Hãy nói cho {myName} biết bạn cần gì.</div>}
         {state.messages.map((m) => (
           <MessageView key={m.id} m={m} agentName={agentName} />
         ))}
         {questions.map((q) => (
           <div key={q.id} className="question">
-            <div className="small muted">{q.kind === "permission" ? "Cần cho phép" : "CTO hỏi bạn"}</div>
+            <div className="small muted">{q.kind === "permission" ? "Cần cho phép" : `${myName} hỏi bạn`}</div>
             <div>{q.text}</div>
             <QuestionReply q={q} onAnswer={(a) => answer(q, a)} />
           </div>
@@ -209,7 +276,7 @@ function Conversation({ sessionID, staff }: { sessionID: string; staff: Staff[] 
           <textarea
             className="grow"
             value={text}
-            placeholder={state.running ? "Gửi thêm chỉ dẫn cho CTO đang làm…" : "Bạn cần gì?"}
+            placeholder={state.running ? `Gửi thêm chỉ dẫn cho ${myName} đang làm…` : `Nhắn cho ${myName}…`}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
@@ -222,7 +289,16 @@ function Conversation({ sessionID, staff }: { sessionID: string; staff: Staff[] 
             Gửi
           </button>
         </div>
-        <div className="hint">Enter để gửi, Shift+Enter xuống dòng. Giao việc thẳng cho nhân viên: <code>@writer viết email chào mừng</code></div>
+        <div className="hint">
+          Enter để gửi, Shift+Enter xuống dòng.
+          {isPrimary ? (
+            <>
+              {" "}Giao việc thẳng cho nhân viên: <code>@writer viết email chào mừng</code>
+            </>
+          ) : (
+            " Nhân viên không giao việc hay tuyển người được; việc đó để CTO lo."
+          )}
+        </div>
       </div>
     </div>
   )
@@ -258,8 +334,18 @@ function QuestionReply({ q, onAnswer }: { q: Question; onAnswer: (a: string) => 
 function MessageView({ m, agentName }: { m: Message; agentName: (id: string) => string }) {
   if (m.role === "user") {
     const text = m.parts.map((p) => (p.type === "text" ? p.text : "")).join("")
-    if (m.source === "system") return <div className="msg system">{text}</div>
     if (m.source === "subagent") return <SubagentResult text={text} agentName={agentName} />
+    const brief = m.source === "agent" || (m.source === "system" && text.startsWith("You are a subagent"))
+    if (brief || (m.source === "user" && m.from && m.from !== "ceo")) {
+      const g = /<goal>([\s\S]*?)<\/goal>/.exec(text)?.[1]
+      return (
+        <div className="msg agent">
+          <div className="from">{m.from ? agentName(m.from) : "CTO"} {g ? "giao việc" : "nhắn"}</div>
+          {g ? <BriefView text={text} /> : text}
+        </div>
+      )
+    }
+    if (m.source === "system") return <div className="msg system">{text}</div>
     return <div className="msg user">{text}</div>
   }
   if (m.role !== "assistant") return null
@@ -293,6 +379,19 @@ function ToolView({ call, result }: { call: Part & { type: "tool-call" }; result
       <pre>{JSON.stringify(call.args, null, 2)}</pre>
       {result && <pre>{result.output}</pre>}
     </details>
+  )
+}
+
+function BriefView({ text }: { text: string }) {
+  const tag = (t: string) => new RegExp(`<${t}>([\\s\\S]*?)</${t}>`).exec(text)?.[1]?.trim()
+  const ctx = tag("context")
+  const done = tag("done_when")
+  return (
+    <>
+      <div>{tag("goal")}</div>
+      {ctx && <div className="muted small">Bối cảnh: {ctx}</div>}
+      {done && <div className="muted small">Xong khi: {done}</div>}
+    </>
   )
 }
 

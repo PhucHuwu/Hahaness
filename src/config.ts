@@ -14,11 +14,26 @@ const ModelInfoSchema = z.object({
   maxOutput: z.number().int().positive().optional(),
 })
 
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * Trước đây ô API key điền sẵn `{env:OPENAI_API_KEY}`; người dùng dán key vào giữa
+ * thành `{env:sk-…}`. Tên biến môi trường không thể chứa `-`, nên phần trong
+ * `{env:…}` không phải tên biến → coi đó là key thật.
+ */
+export function normalizeApiKey(value: string | undefined): string | undefined {
+  const v = value?.trim()
+  if (!v) return undefined
+  const m = /^\{env:(.*)\}$/.exec(v)
+  if (m && !ENV_NAME.test(m[1]!.trim())) return m[1]!.trim() || undefined
+  return v
+}
+
 const ProviderSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("openai"),
-    baseURL: z.string().optional(),
-    apiKey: z.string().optional().describe('Literal or "{env:VAR_NAME}"'),
+    baseURL: z.string().trim().optional(),
+    apiKey: z.string().optional().transform(normalizeApiKey).describe('Literal or "{env:VAR_NAME}"'),
     headers: z.record(z.string(), z.string()).optional(),
     models: z.record(z.string(), ModelInfoSchema).optional(),
   }),
@@ -84,8 +99,15 @@ export function saveConfig(db: Db, config: Config) {
 export async function buildProvider(id: string, cfg: ProviderConfig, cwd: string): Promise<ProviderClient> {
   switch (cfg.type) {
     case "openai": {
-      const apiKey = expandEnv(cfg.apiKey) ?? process.env.OPENAI_API_KEY ?? ""
-      if (!apiKey) throw new Error(`provider "${id}": apiKey is empty (set it in config or {env:...})`)
+      const envName = /^\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(cfg.apiKey ?? "")?.[1]
+      const apiKey = cfg.apiKey ? expandEnv(cfg.apiKey)! : (process.env.OPENAI_API_KEY ?? "")
+      if (!apiKey) {
+        throw new Error(
+          envName
+            ? `provider "${id}": biến môi trường ${envName} chưa được đặt. Dán API key trực tiếp vào ô API key trong Cài đặt.`
+            : `provider "${id}": chưa có API key. Dán API key vào Cài đặt.`,
+        )
+      }
       const headers = Object.fromEntries(Object.entries(cfg.headers ?? {}).map(([k, v]) => [k, expandEnv(v) ?? ""]))
       return new OpenAIProvider({ apiKey, baseURL: cfg.baseURL, headers, models: cfg.models })
     }

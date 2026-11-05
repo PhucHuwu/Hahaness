@@ -21,10 +21,12 @@ ui/ (React + Vite, build tĩnh)  ──HTTP JSON + SSE──▶  src/server/ (no
 
 ## Phiên
 
-- `POST /api/sessions` tạo phiên CTO. `GET /api/sessions` = union phiên sống + phiên trong store (mới nhất trước).
+- `POST /api/sessions` tạo phiên gốc, mặc định với CTO; `agent` = id nhân viên → CEO chat riêng với nhân viên đó (rule nhân viên, xem `04`). `GET /api/sessions` = union phiên sống + phiên trong store (mới nhất trước).
+- Sidebar Chat nhóm phiên **theo người**: CTO trước, rồi từng nhân viên (`/api/staff`), rồi nhân viên đã nghỉ nhưng còn phiên. Mỗi nhóm gồm phiên chat riêng và phiên được CTO giao (thụt vào, "CTO giao"). Nút "Nhắn" tạo phiên chat riêng mới.
+- **Giao tiếp** (`#chat/comms`, `GET /api/conversations[?root=<id>]`): dòng thời gian dựng lại từ bảng `events`, không lưu riêng. Brief = user message đầu của phiên con; steer/CEO nhắn = user message sau đó (theo `from`); báo cáo = `<subagent …>` trong phiên cha (tool-result `delegate` foreground hoặc message `source: subagent`), hoặc câu trả lời cuối của phiên con nếu báo cáo còn nằm trong inbox (direct mode). Hiện chỉ có quan hệ cha→con; nhân viên không nhắn ngang nhau.
 - `Harness.resume(id)`: nạp lại từ bảng `events` (messages + compaction cuối), dựng system prompt **từ tài liệu hiện tại** — nghĩa là sửa COMPANY.md rồi resume phiên cũ sẽ thấy bản mới. Đây là ngoại lệ có chủ ý của "đóng băng per-session": resume là ranh giới phiên mới về mặt cache.
 - `POST …/messages` push inbox và trả `{ok}` ngay; kết quả đi qua SSE. Trạng thái `running` theo `turn` event.
-- **Direct mode** `@writer <task>` từ UI → `POST …/direct` → `spawn(background, wakeParent: false)`: nhân viên chạy nền, báo cáo rơi vào inbox CTO nhưng **không đánh thức** CTO (tránh CTO tự trả lời CEO khi CEO không hỏi). CEO thấy kết quả ở phiên con (link trong thanh "Nhân viên") và CTO thấy ở lượt sau.
+- **Direct mode** `@writer <task>` từ UI → `POST …/direct` → `spawn(background, wakeParent: false)`: nhân viên chạy nền, báo cáo rơi vào inbox CTO nhưng **không đánh thức** CTO (tránh CTO tự trả lời CEO khi CEO không hỏi). CEO thấy kết quả ở phiên con (link trong thanh "Nhân viên" hoặc nhóm của nhân viên trong sidebar) và CTO thấy ở lượt sau. `@` chỉ dùng trong phiên agent primary (400 nếu gọi từ phiên nhân viên).
 - `question` tool và permission `ask`: server giữ promise, phát `question` event, UI render ô trả lời trong chat, `POST /api/questions/:id` resolve. Tool `question` không nhận sessionID qua handler nên server theo dõi phiên vừa gọi `question` qua `onToolStart` (đủ vì `question` là serial và chỉ CTO có).
 
 ## Tri thức (Knowledge)

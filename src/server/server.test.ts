@@ -200,3 +200,26 @@ test("results: deliverables and drafts are listed, viewed, downloaded and delete
   assert.equal((await fetch(base + `/api/results/file?path=${q}`, { method: "DELETE" })).status, 200)
   assert.equal(app.docs.has("deliverables/Kế hoạch Q1.md"), false)
 })
+
+test("employee chat + conversations: CEO chats with an employee directly; direct task shows brief and report in the timeline", async () => {
+  const { status, data: emp } = await send<{ session: { id: string; agent: string; parentID?: string } }>("POST", "/api/sessions", { agent: "writer" })
+  assert.equal(status, 200)
+  assert.equal(emp.session.agent, "writer")
+  assert.equal(emp.session.parentID, undefined)
+  const live = app.harness.get(emp.session.id)
+  assert.ok(!app.tools.snapshot(live.ruleset).tools.some((t) => t.name === "delegate" || t.name === "hire"))
+  const empDone = waitEvent((ev) => ev.type === "turn" && ev.sessionID === emp.session.id && ev.running === false)
+  await send("POST", `/api/sessions/${emp.session.id}/messages`, { text: "chào" })
+  await empDone
+  const bad = await send("POST", `/api/sessions/${emp.session.id}/direct`, { agent: "writer", task: "x" })
+  assert.equal(bad.status, 400)
+
+  const { data: cto } = await send<{ session: { id: string } }>("POST", "/api/sessions", { agent: "cto" })
+  const childDone = waitEvent((ev) => ev.type === "turn" && ev.running === false && ev.sessionID !== cto.session.id && ev.sessionID !== emp.session.id)
+  const d = await send<{ sessionID: string }>("POST", `/api/sessions/${cto.session.id}/direct`, { agent: "writer", task: "viết tiêu đề" })
+  await childDone
+  const items = await get<Array<{ kind: string; from: string; to: string; sessionID: string; text: string }>>(`/api/conversations?root=${cto.session.id}`)
+  assert.deepEqual(items.map((i) => [i.kind, i.from, i.to]), [["brief", "ceo", "writer"], ["report", "writer", "cto"]])
+  assert.equal(items[0]!.sessionID, d.data.sessionID)
+  assert.match(items[0]!.text, /^viết tiêu đề/)
+})

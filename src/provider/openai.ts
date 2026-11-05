@@ -56,7 +56,13 @@ export class OpenAIProvider implements ProviderClient {
     if (!res.ok || !res.body) {
       const text = await res.text().catch(() => "")
       const retryable = res.status === 429 || res.status >= 500
-      yield { type: "error", error: new Error(`${res.status} ${text.slice(0, 500)}`), retryable }
+      const hint =
+        res.status === 401 || res.status === 403
+          ? ` — API key bị từ chối bởi ${this.baseURL}. Kiểm tra lại key trong Cài đặt.`
+          : res.status === 404 || (res.status === 400 && !text.trim())
+            ? ` — kiểm tra Base URL (thường kết thúc bằng /v1) và tên model "${request.model}" có trong danh sách model của provider.`
+            : ""
+      yield { type: "error", error: new Error(`${res.status} ${text.slice(0, 500)}${hint}`), retryable }
       return
     }
 

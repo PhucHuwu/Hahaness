@@ -92,6 +92,18 @@ files: drafts/welcome-email.md
 - Ruleset = `inherit(parent, child)`: parent deny → child không bao giờ allow.
 - System context: Tier A của chính họ + `COMPANY.md`; **không** có `USER.md`/`MEMORY.md` (không cần biết sếp thích gì, và giảm rò rỉ).
 - `context: fork` (analyst): thêm summary compaction gần nhất của CTO + 20 message gần nhất, cap 30k token.
+- `employeeRules` trong `Harness.activate` áp cho **mọi** phiên của agent không phải `primary`, kể cả phiên resume sau restart (lúc đó rule của `spawn` không còn): deny mọi `MANAGEMENT_ACTIONS`. Ngoại lệ: phiên gốc (CEO chat riêng với nhân viên) được `question` vì CEO đang ngồi đó, nhưng không được `delegate`; phiên con chỉ orchestrator mới được `delegate`.
+
+### Ai nói gì: `Message.source` + `from`
+
+| source | from | khi nào |
+|---|---|---|
+| `user` | `ceo` | CEO gõ |
+| `agent` | id agent / `ceo` | brief khi spawn (`from` = agent cha, hoặc `ceo` ở direct mode); `delegate steer` (`from` = CTO) |
+| `subagent` | id nhân viên | báo cáo nền đổ vào inbox phiên cha |
+| `system` | — | harness (compaction, max steps) |
+
+Trước đây steer đánh `source: user`, nên không phân biệt được với CEO. Brief cũ (`source: system`, bắt đầu bằng "You are a subagent") vẫn được UI/timeline nhận ra. `from` chỉ là metadata cho UI; model không thấy.
 
 ## Cách CTO làm việc (system prompt)
 
@@ -106,7 +118,8 @@ files: drafts/welcome-email.md
 ## CEO
 
 - Mặc định gõ tự nhiên với CTO.
-- `@writer <task>` → brief tối thiểu, spawn foreground từ session CTO, in thẳng kết quả.
+- `@writer <task>` trong phiên CTO → brief tối thiểu, spawn nền (`wakeParent: false`).
+- Chat riêng: `POST /api/sessions { agent: "<id nhân viên>" }` tạo phiên gốc với nhân viên; nhân viên trả lời thẳng CEO, không giao việc/tuyển người.
 - `/staff` xem nhân viên + assignment đang chạy.
 
 ## Giới hạn

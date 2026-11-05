@@ -23,7 +23,7 @@ import type { ModelRequest, ProviderClient, StreamEvent } from "./provider/types
 import { evaluate, denied } from "./permission/ruleset.ts"
 import { fromMarkdown } from "./agent/registry.ts"
 import { ProviderRegistry } from "./provider/registry.ts"
-import { buildProviders, expandEnv } from "./config.ts"
+import { buildProviders, ConfigSchema, expandEnv } from "./config.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -278,6 +278,61 @@ test("delegate background: result arrives as inbox message and wakes parent", as
   }
 })
 
+test("employee chat: root session for an employee has no management tools; CEO message marked from ceo", async () => {
+  const provider = scripted([
+    (req) => {
+      const names = req.tools.map((t) => t.name)
+      for (const t of ["delegate", "hire", "knowledge", "manage_skill", "staff"]) assert.ok(!names.includes(t), `employee must not have ${t}`)
+      return [{ type: "text-delta", text: "hi CEO" }, finish()]
+    },
+  ])
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const s = await harness.createSession({ agent: "researcher" })
+    assert.equal((await harness.send(s.session.id, "hello")).tag, "completed")
+    assert.equal(s.messages[0]!.source, "user")
+    assert.equal(s.messages[0]!.from, "ceo")
+    // Resume (vd sau restart) vẫn giữ rule nhân viên.
+    const resumed = await new Harness(harness.cfg).resume(s.session.id)
+    assert.ok(evaluate(resumed.ruleset, "hire", "*") === "deny")
+  } finally {
+    await cleanup()
+  }
+})
+
+test("delegate: brief and steer are marked as coming from the CTO, not the CEO", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  const provider: ProviderClient = {
+    info: () => ({ id: "mock", contextWindow: 100_000, maxOutput: 8_000 }),
+    async *stream(req) {
+      const first = req.messages[0]
+      const text = first?.parts[0]?.type === "text" ? first.parts[0].text : ""
+      if (text.includes("<brief>")) {
+        await gate
+        yield { type: "text-delta", text: "child report" }
+        yield finish()
+        return
+      }
+      yield { type: "text-delta", text: "ok" }
+      yield finish()
+    },
+  }
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const main = await harness.createSession({ agent: "cto" })
+    const r = await harness.spawn(main.session.id, { agent: "researcher", brief: { goal: "g", context: "c", done_when: "d" }, background: true })
+    const child = harness.get((r as { sessionID: string }).sessionID)
+    void harness.send(child.session.id, "focus on Y", "steer", "cto")
+    release()
+    await child.running
+    const userMsgs = child.messages.filter((m) => m.role === "user")
+    assert.deepEqual(userMsgs.map((m) => [m.source, m.from]), [["agent", "cto"], ["agent", "cto"]])
+  } finally {
+    await cleanup()
+  }
+})
+
 test("permission: last match wins, deny never overridden", () => {
   const rules = [
     { action: "shell", resource: "*", effect: "ask" as const },
@@ -324,6 +379,16 @@ test("config: custom provider module and env expansion", async () => {
     if (ev.type === "text-delta") events.push(ev.text)
   }
   assert.deepEqual(events, ["pong"])
+})
+
+test("config: key pasted inside {env:…} is treated as the literal key; missing env var is explained", async () => {
+  const parse = (apiKey: string) => ConfigSchema.parse({ providers: { p: { type: "openai", apiKey } } }).providers.p as { apiKey?: string }
+  assert.equal(parse("{env:sk-abc-123}").apiKey, "sk-abc-123")
+  assert.equal(parse("  sk-abc  ").apiKey, "sk-abc")
+  assert.equal(parse("{env:MY_KEY}").apiKey, "{env:MY_KEY}")
+  assert.equal(parse("").apiKey, undefined)
+  delete process.env.HAHA_MISSING_KEY
+  await assert.rejects(buildProviders({ providers: { p: { type: "openai", apiKey: "{env:HAHA_MISSING_KEY}" } } }, here), /HAHA_MISSING_KEY chưa được đặt/)
 })
 
 const call = (name: string, args: unknown, callID = "c1"): StreamEvent[] => [{ type: "tool-call", callID, name, args }, finish("tool-calls")]
