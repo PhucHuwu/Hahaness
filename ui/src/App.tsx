@@ -2,12 +2,14 @@ import { useEffect, useState } from "react"
 import { Chat } from "./pages/Chat.tsx"
 import { Settings } from "./pages/Settings.tsx"
 import { Knowledge } from "./pages/Knowledge.tsx"
+import { Results } from "./pages/Results.tsx"
 import { Skills } from "./pages/Skills.tsx"
 import { Mcp } from "./pages/Mcp.tsx"
 import { useConnectionState } from "./events.ts"
 
 const PAGES = [
   ["chat", "Chat"],
+  ["results", "Kết quả"],
   ["knowledge", "Tri thức"],
   ["skills", "Kỹ năng"],
   ["mcp", "MCP"],
@@ -46,6 +48,7 @@ export function App() {
       </nav>
       <main className="main">
         {page === "chat" && <Chat sessionID={arg || undefined} />}
+        {page === "results" && <Results path={arg || undefined} />}
         {page === "knowledge" && <Knowledge />}
         {page === "skills" && <Skills />}
         {page === "mcp" && <Mcp />}

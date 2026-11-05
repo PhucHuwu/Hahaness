@@ -38,13 +38,13 @@ export function Skills() {
       <div className="split" style={{ height: "calc(100% - 70px)" }}>
         <div className="stack" style={{ overflow: "auto" }}>
           <div className="row between">
-            <h3>skills/</h3>
+            <h3>Kỹ năng</h3>
             <button className="btn small" onClick={create}>
               Thêm
             </button>
           </div>
           <div className="list">
-            {skills?.length === 0 && !draft && <div className="empty small">Chưa có kỹ năng nào. Mỗi kỹ năng là một thư mục skills/&lt;id&gt;/SKILL.md.</div>}
+            {skills?.length === 0 && !draft && <div className="empty small">Chưa có kỹ năng nào. Mô tả cho CTO một cách làm việc lặp lại ("báo cáo tuần làm thế này…"), CTO sẽ tạo kỹ năng.</div>}
             {draft && (
               <button className={!sel ? "active" : undefined} onClick={() => setSel(undefined)}>
                 <div className="title mono">{draft.id}</div>
@@ -65,7 +65,7 @@ export function Skills() {
           ) : draft ? (
             <Editor
               key={draft.id}
-              title={`skills/${draft.id}/SKILL.md`}
+              title={draft.id}
               hint="Frontmatter name + description; description là câu quyết định khi nào nhân viên dùng kỹ năng này."
               initial={draft.content}
               onSave={async (text) => {
@@ -97,7 +97,7 @@ function SkillEditor({ id, onChanged }: { id: string; onChanged: () => void }) {
   if (content === undefined) return <div className="empty">Đang tải…</div>
   return (
     <Editor
-      title={`skills/${id}/SKILL.md`}
+      title={id}
       hint="Frontmatter name + description; description là câu quyết định khi nào nhân viên dùng kỹ năng này."
       initial={content}
       onSave={async (text) => {

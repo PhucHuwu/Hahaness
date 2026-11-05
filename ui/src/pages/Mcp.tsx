@@ -53,7 +53,7 @@ export function Mcp() {
             }}
           />
         )}
-        {servers?.length === 0 && !adding && <div className="card empty">Chưa có server nào. Cấu hình lưu ở .hahaness/mcp.json.</div>}
+        {servers?.length === 0 && !adding && <div className="card empty">Chưa có server nào. Bảo CTO kết nối công cụ bạn cần, hoặc bấm thêm ở đây.</div>}
         {servers?.map((s) => (
           <div key={s.id} className="card stack">
             <div className="row between">

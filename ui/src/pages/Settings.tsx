@@ -25,8 +25,8 @@ export function Settings() {
     setSaving(true)
     setSaved(undefined)
     try {
-      const r = await api.put<{ path: string; providerError: string | null }>("/api/config", config)
-      setSaved(`Đã lưu ${r.path}`)
+      const r = await api.put<{ providerError: string | null }>("/api/config", config)
+      setSaved("Đã lưu")
       await load()
       if (r.providerError) setError(r.providerError)
     } catch (e) {
@@ -80,7 +80,7 @@ export function Settings() {
           <div className="card stack">
             <div className="row between">
               <h2>Model mặc định</h2>
-              <span className="small muted">{view.path ? `Đọc từ ${view.path}` : `Chưa có file cấu hình; sẽ ghi ${view.writePath}`}</span>
+              <span className="small muted mono" title="Toàn bộ dữ liệu công ty nằm trong file này">{view.db}</span>
             </div>
             <label className="field">
               Dạng <code>provider/model</code>, ví dụ <code>openai/gpt-4.1</code>
