@@ -20,7 +20,7 @@ export type StreamEvent =
   | { type: "reasoning-delta"; text: string }
   | { type: "tool-call"; callID: string; name: string; args: unknown }
   | { type: "finish"; reason: "stop" | "tool-calls" | "length" | "error"; usage: Usage }
-  | { type: "error"; error: Error; retryable: boolean }
+  | { type: "error"; error: Error; retryable: boolean; retryAfterMs?: number }
 
 export interface ModelInfo {
   id: string

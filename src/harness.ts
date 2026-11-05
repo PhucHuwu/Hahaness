@@ -4,7 +4,11 @@ import type { Db } from "./core/db.ts"
 import type { DocumentStore } from "./context/documents.ts"
 import { Inbox } from "./core/inbox.ts"
 import { id } from "./core/id.ts"
-import { runTurn, type LoopEvents, type TurnContext } from "./core/loop.ts"
+import { repairDangling, runTurn, type LoopEvents, type TurnContext } from "./core/loop.ts"
+import { fromCheckpoint } from "./context/compaction.ts"
+
+export const RESUMED_AFTER_CRASH =
+  "[harness] Your previous turn in this conversation was cut off (the app was restarted). Tool calls marked \"interrupted\" may or may not have taken effect; check the workspace before redoing them."
 import { SessionStore } from "./core/store.ts"
 import type { Compaction, Message, Outcome, Session } from "./core/types.ts"
 import { build as buildSystem } from "./context/system.ts"
@@ -93,7 +97,12 @@ export class Harness {
     const live = await this.activate(state.session, agent, {})
     live.messages.push(...state.messages)
     live.compaction = state.compactions.at(-1)
-    live.estimate.estimated += state.messages.reduce((n, m) => n + estimateMessage(m), 0)
+    const repaired = await repairDangling({ sessionID, messages: live.messages, store: this.store })
+    live.estimate.estimated += fromCheckpoint(live.messages, live.compaction).reduce((n, m) => n + estimateMessage(m), 0)
+    if (state.staleClaim || repaired > 0) {
+      // Không tự chạy tiếp (tốn tiền, CEO có thể không muốn); báo cho model ở lượt kế tiếp.
+      live.inbox.push("queue", { id: id("msg"), role: "user", source: "system", createdAt: Date.now(), parts: [{ type: "text", text: RESUMED_AFTER_CRASH }] })
+    }
     return live
   }
 
@@ -214,7 +223,7 @@ export class Harness {
    * `wakeParent: false` (direct mode từ UI): kết quả vẫn vào inbox CTO nhưng
    * không đánh thức — CTO thấy ở lượt sau thay vì tự trả lời CEO.
    */
-  async spawn(parentID: string, opts: { agent: string; brief: Brief; context?: "isolated" | "fork"; background?: boolean; wakeParent?: boolean; model?: string; from?: string }) {
+  async spawn(parentID: string, opts: { agent: string; brief: Brief; context?: "isolated" | "fork"; background?: boolean; wakeParent?: boolean; model?: string; from?: string; signal?: AbortSignal }) {
     const parent = this.get(parentID)
     const maxDepth = this.cfg.maxDepth ?? 1
     if (parent.depth >= maxDepth) throw new Error(`delegate: max depth ${maxDepth} reached`)
@@ -245,10 +254,19 @@ export class Harness {
       parts: [{ type: "text", text: `You are a subagent spawned by another session.\n${forked}\n${renderBrief(opts.brief)}` }],
     })
 
+    // Foreground: parent đang chờ trong tool call → dừng parent (hoặc tool timeout) thì dừng luôn child.
+    // Background chạy độc lập; dừng bằng delegate(stop) hoặc nút Dừng ở phiên nhân viên.
+    const stopChild = () => child.abort.abort("parent stopped")
+    const link = !opts.background ? opts.signal : undefined
     this.activeSubagents++
     const run = this.wake(child)
       .then((outcome) => this.result(child, outcome))
-      .finally(() => this.activeSubagents--)
+      .finally(() => {
+        this.activeSubagents--
+        link?.removeEventListener("abort", stopChild)
+      })
+    if (link?.aborted) stopChild()
+    else link?.addEventListener("abort", stopChild, { once: true })
 
     if (opts.background) {
       void run.then((entry) => {

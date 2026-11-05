@@ -54,6 +54,7 @@ If no employee fits, use \`hire\` first.`,
             brief: input.brief,
             context: input.context,
             background: input.background,
+            signal: ctx.signal,
           })
           if ("status" in r && r.status === "running") return { output: `${input.agent} is working on it (session ${r.sessionID}). Their report will arrive as a message; continue with other work, do not poll.` }
           return { output: renderResult(r as any) }

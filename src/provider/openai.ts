@@ -62,7 +62,7 @@ export class OpenAIProvider implements ProviderClient {
           : res.status === 404 || (res.status === 400 && !text.trim())
             ? ` — kiểm tra Base URL (thường kết thúc bằng /v1) và tên model "${request.model}" có trong danh sách model của provider.`
             : ""
-      yield { type: "error", error: new Error(`${res.status} ${text.slice(0, 500)}${hint}`), retryable }
+      yield { type: "error", error: new Error(`${res.status} ${text.slice(0, 500)}${hint}`), retryable, retryAfterMs: retryAfter(res.headers) }
       return
     }
 
@@ -97,6 +97,8 @@ export class OpenAIProvider implements ProviderClient {
       }
     }
 
+    // Bị dừng giữa stream: args có thể dở dang → không phát tool-call nào.
+    if (signal.aborted) return
     for (const c of [...calls.values()]) {
       let args: unknown
       try {
@@ -108,6 +110,18 @@ export class OpenAIProvider implements ProviderClient {
     }
     yield { type: "finish", reason: calls.size ? "tool-calls" : finish, usage }
   }
+}
+
+/** `retry-after-ms` (OpenAI) hoặc `retry-after` (giây hoặc HTTP date). */
+export function retryAfter(h: Headers): number | undefined {
+  const ms = Number(h.get("retry-after-ms"))
+  if (ms > 0) return ms
+  const v = h.get("retry-after")
+  if (!v) return undefined
+  const s = Number(v)
+  if (s > 0) return s * 1000
+  const at = Date.parse(v)
+  return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now())
 }
 
 function toChatMessages(messages: Message[]): ChatMessage[] {

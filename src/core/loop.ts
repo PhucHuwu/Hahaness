@@ -45,9 +45,14 @@ export interface TurnContext {
 
 const MAX_OUTPUT_LIMIT_STREAK = 3
 const MAX_RETRIES = 5
+/** Provider bảo chờ lâu hơn mức này (vd hết quota theo ngày) → báo lỗi luôn thay vì treo lượt. */
+const MAX_RETRY_DELAY = 60_000
+
+export const INTERRUPTED_TOOL_OUTPUT = "interrupted: the turn stopped before this tool finished. Its effect is unknown; check before repeating it."
 
 export async function runTurn(ctx: TurnContext): Promise<Outcome> {
   await ctx.store.claim(ctx.sessionID)
+  await repairDangling(ctx)
   let step = 0
   let wrapupSent = false
   let outputLimitStreak = 0
@@ -65,7 +70,7 @@ export async function runTurn(ctx: TurnContext): Promise<Outcome> {
         await appendNotice(ctx, WRAPUP_NOTICE)
       }
 
-      const outcome = await runStep(ctx, step, guard)
+      const outcome = await runStep(ctx, step, guard, retries)
       step++
       switch (outcome.tag) {
         case "continue":
@@ -80,6 +85,7 @@ export async function runTurn(ctx: TurnContext): Promise<Outcome> {
           continue
         case "retry":
           if (++retries > MAX_RETRIES) return { tag: "failed", error: new Error(`provider: ${outcome.reason}`) }
+          if (outcome.delay > MAX_RETRY_DELAY) return { tag: "failed", error: new Error(`provider asked to wait ${Math.ceil(outcome.delay / 1000)}s: ${outcome.reason}`) }
           ctx.events.onNotice?.(ctx.sessionID, `retry in ${outcome.delay}ms: ${outcome.reason}`)
           await sleep(outcome.delay, ctx.signal)
           continue
@@ -92,7 +98,7 @@ export async function runTurn(ctx: TurnContext): Promise<Outcome> {
   }
 }
 
-async function runStep(ctx: TurnContext, step: number, guard: DoomGuard): Promise<Outcome> {
+async function runStep(ctx: TurnContext, step: number, guard: DoomGuard, retryCount: number): Promise<Outcome> {
   const info = ctx.provider.info(ctx.model)
   if (total(ctx.estimate) >= ceiling(info.contextWindow)) {
     const ok = await compact(ctx)
@@ -131,37 +137,39 @@ async function runStep(ctx: TurnContext, step: number, guard: DoomGuard): Promis
     await ctx.store.addPart(ctx.sessionID, assistant.id, part)
   }
 
-  for await (const ev of ctx.provider.stream(request, ctx.signal)) {
-    switch (ev.type) {
-      case "text-delta":
-        text += ev.text
-        ctx.events.onText?.(ctx.sessionID, ev.text)
-        break
-      case "reasoning-delta":
-        ctx.events.onReasoning?.(ctx.sessionID, ev.text)
-        break
-      case "tool-call": {
-        if (text) {
-          await addPart({ type: "text", text })
-          text = ""
-        }
-        await addPart({ type: "tool-call", callID: ev.callID, name: ev.name, args: ev.args })
-        toolRuns.push(launchTool(ctx, ev, serialChain))
+  let streamError: Extract<StreamEvent, { type: "error" }> | undefined
+  try {
+    for await (const ev of ctx.provider.stream(request, ctx.signal)) {
+      if (ev.type === "error") {
+        streamError = ev
         break
       }
-      case "finish":
-        finish = ev
-        break
-      case "error":
-        if (ctx.signal.aborted) return { tag: "interrupted" }
-        if (/context|too long|maximum.*tokens/i.test(ev.error.message) && !persisted) {
-          const ok = await compact(ctx)
-          if (ok) return { tag: "compacted" }
-        }
-        return ev.retryable
-          ? { tag: "retry", delay: Math.min(8000, 1000 * 2 ** Math.min(3, step)), reason: ev.error.message }
-          : { tag: "failed", error: ev.error }
+      await onEvent(ev)
     }
+  } catch (e) {
+    // fetch/reader ném khi abort hoặc đứt mạng giữa stream: coi như lỗi retry được.
+    streamError = { type: "error", error: e as Error, retryable: true }
+  }
+
+  if (streamError) {
+    // Tool-call đã ghi thì vẫn phải có result, nếu không transcript hỏng cho mọi request sau.
+    if (toolRuns.length) for (const r of await Promise.all(toolRuns)) await addPart(r)
+    if (ctx.signal.aborted) {
+      if (text) await addPart({ type: "text", text })
+      return { tag: "interrupted" }
+    }
+    if (toolRuns.length) {
+      if (guard.observe(assistant.parts) === "fail") return { tag: "failed", error: new Error("doom loop detected") }
+      return { tag: "continue" }
+    }
+    const ev = streamError
+    if (/context|too long|maximum.*tokens/i.test(ev.error.message) && !persisted) {
+      const ok = await compact(ctx)
+      if (ok) return { tag: "compacted" }
+    }
+    return ev.retryable
+      ? { tag: "retry", delay: ev.retryAfterMs ?? Math.min(8000, 1000 * 2 ** Math.min(3, retryCount)), reason: ev.error.message }
+      : { tag: "failed", error: ev.error }
   }
   if (text) await addPart({ type: "text", text })
 
@@ -173,10 +181,15 @@ async function runStep(ctx: TurnContext, step: number, guard: DoomGuard): Promis
     if (verdict === "fail") return { tag: "failed", error: new Error("doom loop detected") }
     if (verdict === "warn") await appendNotice(ctx, REPEATED_TOOL_NOTICE)
   }
+  if (ctx.signal.aborted) {
+    if (!persisted) await persist()
+    return { tag: "interrupted" }
+  }
 
-  if (finish) {
+  if (finish && finish.usage.inputTokens > 0) {
     ctx.estimate = { measured: finish.usage.inputTokens, estimated: estimateMessage(assistant) }
   } else {
+    // Provider không trả usage → giữ ước lượng tích lũy, đừng reset về 0 (nếu không compaction không bao giờ chạy).
     ctx.estimate.estimated += estimateMessage(assistant)
   }
 
@@ -184,6 +197,31 @@ async function runStep(ctx: TurnContext, step: number, guard: DoomGuard): Promis
   if (toolRuns.length) return { tag: "continue" }
   if (finish?.reason === "length") return { tag: "output-limit" }
   return { tag: "completed", text: assistant.parts.filter((p) => p.type === "text").map((p) => p.text).join("") }
+
+  async function onEvent(ev: Exclude<StreamEvent, { type: "error" }>) {
+    switch (ev.type) {
+      case "text-delta":
+        text += ev.text
+        ctx.events.onText?.(ctx.sessionID, ev.text)
+        break
+      case "reasoning-delta":
+        ctx.events.onReasoning?.(ctx.sessionID, ev.text)
+        break
+      case "tool-call": {
+        if (ctx.signal.aborted) break
+        if (text) {
+          await addPart({ type: "text", text })
+          text = ""
+        }
+        await addPart({ type: "tool-call", callID: ev.callID, name: ev.name, args: ev.args })
+        toolRuns.push(launchTool(ctx, ev, serialChain))
+        break
+      }
+      case "finish":
+        finish = ev
+        break
+    }
+  }
 }
 
 function launchTool(ctx: TurnContext, ev: Extract<StreamEvent, { type: "tool-call" }>, serial: { p: Promise<void> }): Promise<Part> {
@@ -220,6 +258,27 @@ async function compact(ctx: TurnContext): Promise<boolean> {
     ctx.events.onNotice?.(ctx.sessionID, `compaction failed: ${(e as Error).message}`)
     return false
   }
+}
+
+/**
+ * Tool-call không có result (server tắt giữa lúc tool chạy, hoặc lỗi giữa chừng) → ghi result
+ * "interrupted". API kiểu OpenAI từ chối request có tool_calls thiếu tool message, nên nếu
+ * không vá thì phiên hỏng vĩnh viễn.
+ */
+export async function repairDangling(ctx: Pick<TurnContext, "sessionID" | "messages" | "store">) {
+  let repaired = 0
+  for (const m of ctx.messages) {
+    if (m.role !== "assistant") continue
+    const done = new Set(m.parts.flatMap((p) => (p.type === "tool-result" ? [p.callID] : [])))
+    for (const p of [...m.parts]) {
+      if (p.type !== "tool-call" || done.has(p.callID)) continue
+      const part: Part = { type: "tool-result", callID: p.callID, name: p.name, output: INTERRUPTED_TOOL_OUTPUT, isError: true }
+      m.parts.push(part)
+      await ctx.store.addPart(ctx.sessionID, m.id, part)
+      repaired++
+    }
+  }
+  return repaired
 }
 
 async function appendMessage(ctx: TurnContext, message: Message) {
