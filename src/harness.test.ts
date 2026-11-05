@@ -1,0 +1,196 @@
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { mkdtemp, rm, readFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join, dirname } from "node:path"
+import { fileURLToPath } from "node:url"
+import { z } from "zod"
+import { Harness } from "./harness.ts"
+import { AgentRegistry } from "./agent/registry.ts"
+import { ToolRegistry } from "./tool/registry.ts"
+import { define } from "./tool/define.ts"
+import { delegate } from "./tool/builtin/delegate.ts"
+import type { ModelRequest, ProviderClient, StreamEvent } from "./provider/types.ts"
+import { evaluate, denied } from "./permission/ruleset.ts"
+import { fromMarkdown } from "./agent/registry.ts"
+
+const here = dirname(fileURLToPath(import.meta.url))
+
+/** Provider giả: script theo thứ tự request; mỗi entry là hàm nhận request và trả events. */
+function scripted(steps: Array<(req: ModelRequest) => StreamEvent[]>): ProviderClient & { requests: ModelRequest[] } {
+  const requests: ModelRequest[] = []
+  return {
+    requests,
+    info: () => ({ id: "mock", contextWindow: 100_000, maxOutput: 8_000 }),
+    async *stream(req) {
+      requests.push(req)
+      const fn = steps[requests.length - 1] ?? (() => [{ type: "text-delta", text: "done" }, { type: "finish", reason: "stop", usage: { inputTokens: 10, outputTokens: 1 } }])
+      for (const ev of fn(req)) yield ev
+    },
+  }
+}
+
+const finish = (reason: "stop" | "tool-calls" = "stop"): StreamEvent => ({ type: "finish", reason, usage: { inputTokens: 100, outputTokens: 10 } })
+
+async function setup(provider: ProviderClient) {
+  const dir = await mkdtemp(join(tmpdir(), "hahaness-"))
+  const agents = await new AgentRegistry().load(join(here, "agent", "builtin"))
+  const echo = define({
+    name: "echo",
+    description: "echo",
+    input: z.object({ text: z.string() }),
+    async execute({ text }) {
+      return { output: `echo:${text}` }
+    },
+  })
+  const tools = new ToolRegistry().register(echo, delegate(agents.subagents()))
+  const harness = new Harness({
+    cwd: dir,
+    dataDir: join(dir, ".hahaness"),
+    provider,
+    defaultModel: "mock",
+    agents,
+    tools,
+    askHandler: async () => ({ kind: "once" }),
+    events: {},
+  })
+  return { harness, dir, cleanup: () => rm(dir, { recursive: true, force: true }) }
+}
+
+test("loop: tool call then completion, persisted before execute", async () => {
+  const provider = scripted([
+    () => [{ type: "tool-call", callID: "c1", name: "echo", args: { text: "hi" } }, finish("tool-calls")],
+    (req) => {
+      const last = req.messages.at(-1)!
+      const result = last.parts.find((p) => p.type === "tool-result")
+      assert.equal(result?.output, "echo:hi")
+      return [{ type: "text-delta", text: "ok" }, finish()]
+    },
+  ])
+  const { harness, dir, cleanup } = await setup(provider)
+  try {
+    const main = await harness.createSession({ agent: "cto" })
+    const outcome = await harness.send(main.session.id, "say hi")
+    assert.equal(outcome.tag, "completed")
+    assert.equal(provider.requests.length, 2)
+    const log = await readFile(join(dir, ".hahaness", "sessions", `${main.session.id}.jsonl`), "utf8")
+    const kinds = log.trim().split("\n").map((l) => JSON.parse(l).kind)
+    assert.deepEqual(kinds.slice(0, 4), ["session", "claim", "message", "message"])
+    assert.equal(kinds.at(-1), "release")
+  } finally {
+    await cleanup()
+  }
+})
+
+test("validation error is returned to the model, not thrown", async () => {
+  const provider = scripted([
+    () => [{ type: "tool-call", callID: "c1", name: "echo", args: { nope: 1 } }, finish("tool-calls")],
+    (req) => {
+      const result = req.messages.at(-1)!.parts.find((p) => p.type === "tool-result")
+      assert.ok(result?.isError)
+      assert.match(result!.output, /Invalid arguments/)
+      return [{ type: "text-delta", text: "fixed" }, finish()]
+    },
+  ])
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const main = await harness.createSession({ agent: "cto" })
+    const outcome = await harness.send(main.session.id, "go")
+    assert.equal(outcome.tag, "completed")
+  } finally {
+    await cleanup()
+  }
+})
+
+test("delegate foreground: child isolated, only ResultEntry returns", async () => {
+  const provider = scripted([
+    () => [{ type: "tool-call", callID: "c1", name: "delegate", args: { action: "spawn", agent: "researcher", brief: { goal: "find X", context: "ctx", done_when: "found" } } }, finish("tool-calls")],
+    (req) => {
+      assert.equal(req.messages.length, 1)
+      assert.match(req.messages[0]!.parts[0]!.type === "text" ? req.messages[0]!.parts[0]!.text : "", /<brief>/)
+      assert.ok(!req.tools.some((t) => t.name === "delegate"), "leaf child must not have delegate")
+      return [{ type: "text-delta", text: "X is at src/a.ts" }, finish()]
+    },
+    (req) => {
+      const result = req.messages.at(-1)!.parts.find((p) => p.type === "tool-result")
+      assert.match(result!.output, /<subagent sessionID="ses_\w+" agent="researcher" status="completed"/)
+      assert.match(result!.output, /X is at src\/a\.ts/)
+      return [{ type: "text-delta", text: "reported" }, finish()]
+    },
+  ])
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const main = await harness.createSession({ agent: "cto" })
+    const outcome = await harness.send(main.session.id, "find X")
+    assert.equal(outcome.tag, "completed")
+    assert.equal(harness.list().length, 2)
+  } finally {
+    await cleanup()
+  }
+})
+
+test("delegate background: result arrives as inbox message and wakes parent", async () => {
+  const provider = scripted([
+    () => [{ type: "tool-call", callID: "c1", name: "delegate", args: { action: "spawn", agent: "researcher", background: true, brief: { goal: "g", context: "c", done_when: "d" } } }, finish("tool-calls")],
+    (req) => {
+      const r = req.messages.at(-1)!.parts.find((p) => p.type === "tool-result")
+      if (r) {
+        assert.match(r.output, /background/)
+        return [{ type: "text-delta", text: "waiting" }, finish()]
+      }
+      return [{ type: "text-delta", text: "child done" }, finish()]
+    },
+    (req) => {
+      const r = req.messages.at(-1)!.parts.find((p) => p.type === "tool-result")
+      if (r) return [{ type: "text-delta", text: "waiting" }, finish()]
+      return [{ type: "text-delta", text: "child done" }, finish()]
+    },
+    (req) => {
+      const last = req.messages.at(-1)!
+      assert.equal(last.source, "subagent")
+      return [{ type: "text-delta", text: "got it" }, finish()]
+    },
+  ])
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const main = await harness.createSession({ agent: "cto" })
+    await harness.send(main.session.id, "go")
+    await new Promise((r) => setTimeout(r, 50))
+    const child = harness.list().find((l) => l.session.parentID === main.session.id)!
+    await child.running
+    await new Promise((r) => setTimeout(r, 50))
+    await main.running
+    assert.ok(main.messages.some((m) => m.source === "subagent"))
+  } finally {
+    await cleanup()
+  }
+})
+
+test("permission: last match wins, deny never overridden", () => {
+  const rules = [
+    { action: "shell", resource: "*", effect: "ask" as const },
+    { action: "shell", resource: "npm test*", effect: "allow" as const },
+    { action: "shell", resource: "git push*", effect: "deny" as const },
+  ]
+  assert.equal(evaluate(rules, "shell", "npm test -- x"), "allow")
+  assert.equal(evaluate(rules, "shell", "ls"), "ask")
+  assert.equal(evaluate(rules, "shell", "git push origin"), "deny")
+  assert.equal(evaluate(rules, "read", "a.ts"), "ask")
+  assert.ok(denied([...rules, { action: "shell", resource: "*", effect: "allow" }], "shell", "git push"))
+})
+
+test("agent markdown frontmatter parses rules and model list", () => {
+  const def = fromMarkdown(`---
+id: x
+mode: subagent
+model: [a/b, c/d]
+steps: 7
+permissions:
+  - { action: read, resource: "*", effect: allow }
+---
+Body here`, "x")
+  assert.equal(def.steps, 7)
+  assert.deepEqual(def.model, ["a/b", "c/d"])
+  assert.deepEqual(def.permissions, [{ action: "read", resource: "*", effect: "allow" }])
+  assert.equal(def.system, "Body here")
+})
