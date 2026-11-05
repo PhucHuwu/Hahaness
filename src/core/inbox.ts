@@ -16,6 +16,14 @@ export class Inbox {
     return item
   }
 
+  /** Chèn lên đầu hàng đợi (vd workspace-update phải đứng trước tin nhắn CEO vừa gửi). */
+  pushFront(delivery: InboxItem["delivery"], message: Message): InboxItem {
+    const item = { id: id("inb"), delivery, message }
+    this.items.unshift(item)
+    this.waiters.splice(0).forEach((w) => w())
+    return item
+  }
+
   /** Lấy mọi steer đang chờ (dùng giữa step). */
   drainSteer(): InboxItem[] {
     const out = this.items.filter((i) => i.delivery === "steer")

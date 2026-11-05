@@ -77,15 +77,16 @@ function knowledgeIndex(files: DocMeta[]): string | undefined {
 /** Tier B cho agent: COMPANY + knowledge index luôn; USER + MEMORY chỉ cho primary (nhân viên không cần biết sếp thích gì). */
 export function sources(docs: DocumentStore, opts: { includePersonal: boolean }): InstructionSource[] {
   const out: InstructionSource[] = []
+  const author = (path: string) => docs.get(path)?.author
   const company = capped(docs, FILES.company, FILE_CAP)
-  if (meaningful(company)) out.push({ id: "workspace/company", content: `<company>\n${company}\n</company>`, hash: hash(company) })
+  if (meaningful(company)) out.push({ id: "workspace/company", content: `<company>\n${company}\n</company>`, hash: hash(company), author: author(FILES.company) })
   const index = knowledgeIndex(knowledge(docs))
   if (index) out.push({ id: "workspace/knowledge", content: index, hash: hash(index) })
   if (opts.includePersonal) {
     const user = capped(docs, FILES.user, FILE_CAP)
-    if (meaningful(user)) out.push({ id: "workspace/user", content: `<ceo>\n${user}\n</ceo>`, hash: hash(user) })
+    if (meaningful(user)) out.push({ id: "workspace/user", content: `<ceo>\n${user}\n</ceo>`, hash: hash(user), author: author(FILES.user) })
     const memory = capped(docs, FILES.memory, MEMORY_CAP)
-    if (memory) out.push({ id: "workspace/memory", content: `<memory>\n${memory}\n</memory>`, hash: hash(memory) })
+    if (memory) out.push({ id: "workspace/memory", content: `<memory>\n${memory}\n</memory>`, hash: hash(memory), author: author(FILES.memory) })
   }
   return out
 }

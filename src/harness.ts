@@ -12,7 +12,7 @@ export const RESUMED_AFTER_CRASH =
 import { SessionStore } from "./core/store.ts"
 import type { Compaction, Message, Outcome, Session } from "./core/types.ts"
 import { build as buildSystem } from "./context/system.ts"
-import { environment, type InstructionSource } from "./context/instructions.ts"
+import { changed, environment, removed, updateNotice, type InstructionSource } from "./context/instructions.ts"
 import * as workspace from "./context/workspace.ts"
 import { estimateMessage } from "./context/budget.ts"
 import { AskGate, type AskHandler } from "./permission/ask.ts"
@@ -50,7 +50,11 @@ interface Live {
   compaction?: Compaction
   estimate: { measured: number; estimated: number }
   system: string[]
+  /** Nguồn đã dựng system prompt (đóng băng cả phiên). */
   instructions: InstructionSource[]
+  /** Những gì model đang biết = system + mọi workspace-update đã gửi. So với hiện tại để báo thay đổi. */
+  known: InstructionSource[]
+  knownAt: number
   ruleset: Ruleset
   saved: Set<string>
   depth: number
@@ -109,18 +113,18 @@ export class Harness {
   }
 
   private async activate(session: Session, agent: AgentDef, opts: { ruleset?: Ruleset; depth?: number; extraTools?: Tool[] }): Promise<Live> {
-    const instructions = [
-      ...workspace.sources(this.cfg.docs, { includePersonal: agent.mode === "primary" }),
-      environment(this.cfg.cwd),
-    ]
+    const instructions = await this.contextSources(agent)
+    const skills = instructions.find((s) => s.id === SKILLS_SOURCE)
     const live: Live = {
       session,
       agent,
       inbox: new Inbox(),
       messages: [],
       estimate: { measured: 0, estimated: 0 },
-      system: buildSystem({ agent, instructions, skillsIndex: await this.cfg.skills?.index() }),
+      system: buildSystem({ agent, instructions: instructions.filter((s) => s !== skills), skillsIndex: skills?.content }),
       instructions,
+      known: instructions,
+      knownAt: Date.now(),
       ruleset: [...(this.cfg.permissions ?? []), ...agent.permissions, ...(opts.ruleset ?? []), ...employeeRules(agent, session)],
       saved: new Set(),
       depth: opts.depth ?? 0,
