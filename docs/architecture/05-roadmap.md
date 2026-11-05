@@ -11,25 +11,33 @@
 - [x] `delegate` fg/bg, ResultEntry, fork context; `memory`; `websearch`/`webfetch`
 - [x] CLI readline, `@employee`, `/staff`
 
-## v0.2 — CEO dùng được hằng ngày
+## v0.2 — CEO dùng được hằng ngày (hiện tại)
 
-- [ ] Resume phiên trước (`/continue`), crash resume từ claim
+- [x] Giao diện web (React + Vite) + server `node:http` + SSE — xem `07-ui-server.md`
+- [x] Resume phiên trước từ store (`Harness.resume`, `GET /api/sessions`)
+- [x] Skills: `skills/<id>/SKILL.md`, index Tier A, tool `skill`, CRUD trong UI
+- [x] Knowledge: `knowledge/` index Tier B, editor COMPANY/USER/MEMORY, xem deliverables
+- [x] Quản lý nhân viên từ UI: tuyển / sửa markdown / cho nghỉ (không đụng CTO)
+- [x] MCP client stdio + streamable HTTP, `.hahaness/mcp.json`, bật/tắt từ UI
+- [x] Settings: providers/model trong `hahaness.json`, gọi thử, reconfigure không restart
+- [x] `question` + permission ask trả lời trong chat
+- [ ] Crash resume từ claim (hiện `resume` chỉ nạp transcript, không tự chạy tiếp)
 - [ ] Memory flush trước compaction; daily notes
 - [ ] Workspace file đổi giữa phiên → inject diff
 - [ ] Provider Anthropic; fallback theo list `agent.model`
 - [ ] `websearch` qua provider có key (Tavily/Brave) khi cấu hình
-- [ ] Deliverable viewer: CLI in path + mở file; `/open <path>`
 - [ ] Nhân viên hỏi ngược: `status: needs_input` → CTO hỏi CEO
-- [ ] `/fire <id>`, `/edit-staff <id>` cho CEO
+- [ ] Upload file nhị phân (PDF/DOCX) vào `knowledge/` + trích text
 
 ## v0.3 — Công ty "sống"
 
-- [ ] Giao diện web/desktop đơn giản thay CLI (no-code thật sự)
+- [ ] Auth token + bind ngoài localhost; đóng gói desktop (Tauri/Electron bọc `ui/dist` + server)
 - [ ] Cron/heartbeat: việc định kỳ (báo cáo tuần, theo dõi đối thủ)
 - [ ] Kênh chat (Telegram/Zalo/Slack) như openclaw gateway
-- [ ] MCP client để nối Google Docs/Sheets/Notion/email
+- [ ] MCP resources/prompts; OAuth cho server HTTP
 - [ ] Precompute compaction; session_search
 - [ ] Tổ chức nhiều tầng: CTO → trưởng nhóm (orchestrator) → nhân viên
+- [ ] Chi phí/usage per nhân viên hiển thị trong UI
 
 ## Sau
 

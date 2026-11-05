@@ -56,20 +56,26 @@ src/
   provider/    ProviderClient, registry (provider/model), openai-compatible
   config.ts    hahaness.json, {env:VAR}, custom provider module
   tool/        define, registry, execute pipeline, output truncation
-    builtin/   read, list, write, webfetch, websearch, todo, memory, question, delegate, hire
-  context/     system tiers, workspace (COMPANY/USER/MEMORY), budget, compaction
+    builtin/   read, list, write, webfetch, websearch, todo, memory, question, delegate, hire, skill
+  context/     system tiers, workspace (COMPANY/USER/MEMORY/knowledge), skills, budget, compaction
   permission/  ruleset, ask gate
-  agent/       registry (markdown ↔ AgentDef, hire), builtin/ (cto, researcher, writer, marketer, analyst)
-  harness.ts   sessions, spawn fg/bg, ResultEntry, fork context
+  agent/       registry (markdown ↔ AgentDef, hire/update/fire), builtin/ (cto, researcher, writer, marketer, analyst)
+  mcp/         client (JSON-RPC stdio/http), manager (mcp.json → ToolRegistry)
+  harness.ts   sessions, resume, spawn fg/bg, ResultEntry, fork context
+  bootstrap.ts wiring chuẩn dùng chung CLI + server
+  server/      node:http API + SSE cho UI
   cli.ts
+ui/            React + Vite: Chat, Tri thức, Kỹ năng, MCP, Cài đặt
 
 <workspace của CEO>/
   COMPANY.md  USER.md  MEMORY.md
+  knowledge/     tài liệu tham khảo (index vào prompt, nội dung đọc khi cần)
+  skills/        <id>/SKILL.md — quy trình viết sẵn
   staff/         nhân viên CTO đã tuyển (markdown, sửa tay được)
   drafts/        nhân viên nộp bài
   deliverables/  CTO lưu kết quả cuối
-  .hahaness/     sessions, tool-output (không cần mở)
-  hahaness.json  providers (tùy chọn)
+  .hahaness/     sessions, tool-output, mcp.json (không cần mở)
+  hahaness.json  providers (tùy chọn, sửa được từ UI)
 ```
 
-Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`.
+Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`.
