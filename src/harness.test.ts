@@ -397,6 +397,23 @@ test("config: key pasted inside {env:…} is treated as the literal key; missing
   await assert.rejects(buildProviders({ providers: { p: { type: "openai", apiKey: "{env:HAHA_MISSING_KEY}" } } }, here), /HAHA_MISSING_KEY chưa được đặt/)
 })
 
+test("config: provider-level contextWindow/maxOutput apply to every model; per-model entries override", async () => {
+  const config = ConfigSchema.parse({
+    providers: {
+      proxy: { type: "openai", apiKey: "k", contextWindow: 200_000, models: { small: { contextWindow: 32_000, maxOutput: 4_000 } } },
+      plain: { type: "openai", apiKey: "k" },
+      claude: { type: "anthropic", apiKey: "k", maxOutput: 32_000 },
+    },
+  })
+  const registry = await buildProviders(config, here)
+  const info = (ref: string) => registry.resolve(ref).info
+  assert.deepEqual(info("proxy/any-model"), { id: "any-model", contextWindow: 200_000, maxOutput: 16_384 })
+  assert.deepEqual(info("proxy/small"), { id: "small", contextWindow: 32_000, maxOutput: 4_000 })
+  assert.equal(info("plain/x").contextWindow, 128_000)
+  assert.deepEqual(info("claude/c"), { id: "c", contextWindow: 200_000, maxOutput: 32_000 })
+  assert.throws(() => ConfigSchema.parse({ providers: { p: { type: "openai", contextWindow: 0 } } }))
+})
+
 const call = (name: string, args: unknown, callID = "c1"): StreamEvent[] => [{ type: "tool-call", callID, name, args }, finish("tool-calls")]
 const lastResult = (req: ModelRequest) => req.messages.at(-1)!.parts.find((p) => p.type === "tool-result") as { output: string; isError?: boolean }
 

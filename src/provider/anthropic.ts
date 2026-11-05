@@ -6,6 +6,9 @@ export interface AnthropicConfig {
   baseURL?: string
   apiKey: string
   headers?: Record<string, string>
+  /** Mặc định cho mọi model của provider; `models[id]` đè lên. */
+  contextWindow?: number
+  maxOutput?: number
   models?: Record<string, Partial<ModelInfo>>
 }
 
@@ -32,7 +35,7 @@ export class AnthropicProvider implements ProviderClient {
 
   info(model: string): ModelInfo {
     const o = this.cfg.models?.[model] ?? {}
-    return { id: model, contextWindow: o.contextWindow ?? 200_000, maxOutput: o.maxOutput ?? 16_384 }
+    return { id: model, contextWindow: o.contextWindow ?? this.cfg.contextWindow ?? 200_000, maxOutput: o.maxOutput ?? this.cfg.maxOutput ?? 16_384 }
   }
 
   async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<StreamEvent> {

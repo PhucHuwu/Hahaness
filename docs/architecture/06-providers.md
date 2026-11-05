@@ -37,7 +37,7 @@ Lưu trong DB (bảng `settings`, key `config`; xem `08-storage.md`), CEO sửa 
 ```
 
 - `{env:NAME}` được thay bằng biến môi trường ở `apiKey` và `headers`. Key thật nhập ở Cài đặt nằm trong file `.db` (đừng chia sẻ file đó); API không bao giờ trả key ra UI.
-- `models.<id>` khai `contextWindow` / `maxOutput` để budget và compaction tính đúng; thiếu thì mặc định 128k / 16k.
+- `contextWindow` / `maxOutput` quyết định budget và compaction. Thứ tự: `models.<id>` → khai ở cấp provider (áp cho mọi model của provider, ô "Context tối đa" / "Trả lời tối đa" trong Cài đặt) → mặc định 128k (openai) / 200k (anthropic) và 16k. Mức cấp provider dành cho proxy gom nhiều model (vd CLIProxyAPI): đặt một trần chung, vd `"contextWindow": 200000` → compact quanh 170k (trần trừ max(15%, 16k)). Trần này không được vượt context thật của model; nếu vượt, provider báo overflow và loop compact rồi gửi lại.
 - Không có config → dùng `OPENAI_API_KEY` + `OPENAI_BASE_URL` từ env (provider id `openai`); không có thì dùng `ANTHROPIC_API_KEY` (provider id `anthropic`).
 
 ## Ba loại provider
@@ -52,7 +52,7 @@ Anthropic Messages API (`POST {baseURL}/v1/messages`, SSE). `apiKey` mặc đị
 - **Map message**: role phải luân phiên user/assistant. Message `system` giữa phiên (notice, `<workspace-update>`) được gộp vào user. `tool_result` nằm trong message user ngay sau `tool_use` và đứng trước text. Reasoning không gửi lại, vì không có chữ ký thinking.
 - **Usage**: `inputTokens = input_tokens + cache_read + cache_creation`. Anthropic tách phần trúng cache ra, mà loop cần tổng prompt để quyết định compaction. `outputTokens` lấy từ `message_delta`.
 - **Lỗi**: 429/529/5xx và `overloaded_error` trong stream → retryable, kèm `retry-after`. Body lỗi JSON được rút gọn thành `type: message`, nên "prompt is too long" được `isOverflow` nhận ra.
-- `contextWindow` mặc định 200k; khai thêm qua `models.<id>`.
+- `contextWindow` mặc định 200k; đổi ở cấp provider hoặc `models.<id>`.
 
 ### `type: "custom"`
 Module TS/JS do người dùng viết, export default một factory:

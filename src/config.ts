@@ -34,6 +34,7 @@ const ProviderSchema = z.discriminatedUnion("type", [
     baseURL: z.string().trim().optional(),
     apiKey: z.string().optional().transform(normalizeApiKey).describe('Literal or "{env:VAR_NAME}"'),
     headers: z.record(z.string(), z.string()).optional(),
+    ...ModelInfoSchema.shape,
     models: z.record(z.string(), ModelInfoSchema).optional(),
   }),
   z.object({
@@ -41,6 +42,7 @@ const ProviderSchema = z.discriminatedUnion("type", [
     baseURL: z.string().trim().optional(),
     apiKey: z.string().optional().transform(normalizeApiKey).describe('Literal or "{env:VAR_NAME}"; default ANTHROPIC_API_KEY'),
     headers: z.record(z.string(), z.string()).optional(),
+    ...ModelInfoSchema.shape,
     models: z.record(z.string(), ModelInfoSchema).optional(),
   }),
   z.object({
@@ -102,9 +104,9 @@ export async function buildProvider(id: string, cfg: ProviderConfig, cwd: string
   }
   switch (cfg.type) {
     case "openai":
-      return new OpenAIProvider({ ...keyAndHeaders(cfg, "OPENAI_API_KEY"), baseURL: cfg.baseURL, models: cfg.models })
+      return new OpenAIProvider({ ...keyAndHeaders(cfg, "OPENAI_API_KEY"), baseURL: cfg.baseURL, contextWindow: cfg.contextWindow, maxOutput: cfg.maxOutput, models: cfg.models })
     case "anthropic":
-      return new AnthropicProvider({ ...keyAndHeaders(cfg, "ANTHROPIC_API_KEY"), baseURL: cfg.baseURL, models: cfg.models })
+      return new AnthropicProvider({ ...keyAndHeaders(cfg, "ANTHROPIC_API_KEY"), baseURL: cfg.baseURL, contextWindow: cfg.contextWindow, maxOutput: cfg.maxOutput, models: cfg.models })
     case "custom": {
       const path = isAbsolute(cfg.module) ? cfg.module : resolve(cwd, cfg.module)
       if (!existsSync(path)) throw new Error(`provider "${id}": module not found: ${path}`)

@@ -143,6 +143,11 @@ export function Settings() {
   )
 }
 
+const positive = (v: string) => {
+  const n = Math.floor(Number(v))
+  return n > 0 ? n : undefined
+}
+
 function ProviderCard({ id, p, onChange, onRename, onRemove }: { id: string; p: ProviderConfig; onChange: (p: ProviderConfig) => void; onRename: (to: string) => void; onRemove: () => void }) {
   const [name, setName] = useState(id)
   useEffect(() => setName(id), [id])
@@ -190,6 +195,22 @@ function ProviderCard({ id, p, onChange, onRename, onRemove }: { id: string; p: 
               onChange={(e) => onChange({ ...p, apiKey: e.target.value.trim() || undefined })}
             />
           </label>
+          <div className="row">
+            <label className="field" style={{ flex: 1 }}>
+              Context tối đa (token) — tự tóm tắt hội thoại khi gần chạm (~85%). Bỏ trống = {p.type === "openai" ? "128000" : "200000"}
+              <input
+                type="number"
+                min={1}
+                value={p.contextWindow ?? ""}
+                placeholder={p.type === "openai" ? "128000" : "200000"}
+                onChange={(e) => onChange({ ...p, contextWindow: positive(e.target.value) })}
+              />
+            </label>
+            <label className="field" style={{ flex: 1 }}>
+              Trả lời tối đa (token). Bỏ trống = 16384
+              <input type="number" min={1} value={p.maxOutput ?? ""} placeholder="16384" onChange={(e) => onChange({ ...p, maxOutput: positive(e.target.value) })} />
+            </label>
+          </div>
         </>
       ) : (
         <label className="field">

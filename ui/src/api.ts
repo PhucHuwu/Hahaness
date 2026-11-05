@@ -95,8 +95,8 @@ export interface Question {
 }
 
 export type ProviderConfig =
-  | { type: "openai"; baseURL?: string; apiKey?: string; headers?: Record<string, string>; models?: Record<string, { contextWindow?: number; maxOutput?: number }> }
-  | { type: "anthropic"; baseURL?: string; apiKey?: string; headers?: Record<string, string>; models?: Record<string, { contextWindow?: number; maxOutput?: number }> }
+  | { type: "openai"; baseURL?: string; apiKey?: string; headers?: Record<string, string>; contextWindow?: number; maxOutput?: number; models?: Record<string, { contextWindow?: number; maxOutput?: number }> }
+  | { type: "anthropic"; baseURL?: string; apiKey?: string; headers?: Record<string, string>; contextWindow?: number; maxOutput?: number; models?: Record<string, { contextWindow?: number; maxOutput?: number }> }
   | { type: "custom"; module: string; options?: Record<string, unknown> }
 
 export interface Config {
