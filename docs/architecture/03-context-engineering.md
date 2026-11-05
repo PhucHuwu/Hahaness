@@ -18,7 +18,7 @@
    ├─ <conversation-checkpoint> summary + recent-context   (nếu đã compaction)
    ├─ ... messages từ checkpoint ...
    └─ Tier C — VOLATILE đi qua messages, KHÔNG qua system:
-        ├─ instruction diff (AGENTS.md đổi giữa session) → system-role message
+        ├─ <workspace-update> (COMPANY/USER/MEMORY/knowledge/skills đổi giữa phiên) → message source "system"
         ├─ subagent result   → user-role message `<subagent …>`
         ├─ wrap-up / steer   → user-role message
         └─ skill content     → tool result của `skill`
@@ -39,7 +39,32 @@ Tài liệu công ty là bản ghi trong bảng `documents` (path ảo, xem `08-
 | kỹ năng (bảng `skills`) | mọi vai | chỉ **index** `<available_skills>` ở Tier A; thân load bằng tool `skill` | — |
 
 - Nhân viên không thấy `USER.md`/`MEMORY.md`: họ không cần biết sếp, và giảm rò rỉ sở thích cá nhân vào bài viết.
-- Mỗi source hash SHA-256, baseline lưu theo session. Đổi giữa phiên → (v0.2) push steer message chứa diff, không rewrite system.
+- Mỗi source (COMPANY, USER, MEMORY, knowledge index, `<env>`, skills index) có hash SHA-256.
+
+### Tài liệu đổi giữa phiên (`Harness.refreshContext` + `instructions.updateNotice`)
+
+System prompt **không bao giờ** dựng lại trong phiên (giữ prompt cache). Thay vào đó:
+
+- Mỗi phiên giữ `known`: các source model đang biết, gồm system prompt cộng mọi update đã gửi.
+- Đầu mỗi lượt có input thật (inbox không rỗng), harness dựng lại các source từ DB và so với `known`. Có khác biệt thì chèn **lên đầu hàng đợi** một message `source: "system"`:
+  ```xml
+  <workspace-update>
+  The company workspace changed since this conversation started. These updates replace the matching parts of your system context.
+  COMPANY.md (<company>) now reads: …            ← nội dung mới ≤1.500 chars: gửi nguyên văn
+  COMPANY.md (<company>) changed (- removed, + added): …   ← dài hơn: diff theo dòng
+  The skills list (<available_skills>) was added: …
+  MEMORY.md (<memory>) was removed or emptied; …
+  </workspace-update>
+  ```
+  Mỗi khối bị cắt ở 6.000 chars, kèm lời nhắc dùng `read` để xem phần còn lại.
+- **Không tự chạy lượt chỉ vì tài liệu đổi**: update đi kèm tin nhắn kế tiếp, vì tự chạy sẽ tốn tiền và CEO có thể chưa cần. Đã báo rồi thì không báo lại ở các lượt sau.
+- **Không báo lại thay đổi do chính agent ghi**: tool của nó đã trả nội dung mới rồi. Ví dụ CTO dùng `memory` hoặc `knowledge`. Cách nhận biết:
+  - Với COMPANY, USER, MEMORY: dựa vào `documents.author`.
+  - Với knowledge index: mọi tài liệu `knowledge/` đổi kể từ lần so trước đều do agent này ghi.
+  - Thay đổi do CEO (UI ghi `author = "ceo"`) hoặc do agent khác ghi thì luôn được báo.
+- **Sau compaction**, `known` quay về system gốc, vì update cũ có thể chỉ còn trong summary. Lượt kế tiếp gửi lại phần khác biệt so với system.
+- `resume` dựng lại system từ workspace hiện tại, nên không cần báo gì cho tới khi tài liệu đổi tiếp.
+- Diff là diff theo dòng kiểu multiset, không phải LCS. Với văn bản do người viết như vậy là đủ, và không cần thêm thư viện.
 - Bỏ hẳn AGENTS.md discovery theo thư mục — đó là khái niệm của coding agent.
 
 ## Token budget (`context/budget.ts`)

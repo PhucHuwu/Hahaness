@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import type { AgentDef } from "./agent/types.ts"
 import { MANAGEMENT_ACTIONS, type AgentRegistry } from "./agent/registry.ts"
 import type { Db } from "./core/db.ts"
@@ -6,6 +7,8 @@ import { Inbox } from "./core/inbox.ts"
 import { id } from "./core/id.ts"
 import { repairDangling, runTurn, type LoopEvents, type TurnContext } from "./core/loop.ts"
 import { fromCheckpoint } from "./context/compaction.ts"
+
+const SKILLS_SOURCE = "skills/index"
 
 export const RESUMED_AFTER_CRASH =
   "[harness] Your previous turn in this conversation was cut off (the app was restarted). Tool calls marked \"interrupted\" may or may not have taken effect; check the workspace before redoing them."
@@ -54,6 +57,8 @@ interface Live {
   instructions: InstructionSource[]
   /** Những gì model đang biết = system + mọi workspace-update đã gửi. So với hiện tại để báo thay đổi. */
   known: InstructionSource[]
+  /** Checkpoint lúc `known` được tính; compaction mới có thể đã nuốt các workspace-update trước đó. */
+  knownCheckpoint?: string
   knownAt: number
   ruleset: Ruleset
   saved: Set<string>
@@ -103,6 +108,8 @@ export class Harness {
     const live = await this.activate(state.session, agent, {})
     live.messages.push(...state.messages)
     live.compaction = state.compactions.at(-1)
+    // System vừa dựng lại từ workspace hiện tại → không cần báo gì cho tới khi tài liệu đổi tiếp.
+    live.knownCheckpoint = live.compaction?.id
     const repaired = await repairDangling({ sessionID, messages: live.messages, store: this.store })
     live.estimate.estimated += fromCheckpoint(live.messages, live.compaction).reduce((n, m) => n + estimateMessage(m), 0)
     if (state.staleClaim || repaired > 0) {
@@ -162,6 +169,49 @@ export class Harness {
     return this.wake(live)
   }
 
+  /** Tier B + env + skills index, mỗi thứ một source có hash để so sánh giữa phiên. */
+  private async contextSources(agent: AgentDef): Promise<InstructionSource[]> {
+    const out = [...workspace.sources(this.cfg.docs, { includePersonal: agent.mode === "primary" }), environment(this.cfg.cwd)]
+    const skills = await this.cfg.skills?.index()
+    if (skills) out.push({ id: SKILLS_SOURCE, content: skills, hash: createHash("sha256").update(skills).digest("hex").slice(0, 16) })
+    return out
+  }
+
+  /**
+   * Tài liệu đổi kể từ lần model biết gần nhất → message `<workspace-update>` đứng trước input của lượt.
+   * System prompt không đổi (giữ cache). Thay đổi do chính agent này ghi (vd CTO dùng `memory`)
+   * không báo lại: tool đã trả nội dung mới cho nó rồi.
+   */
+  private async refreshContext(live: Live) {
+    if (live.compaction?.id !== live.knownCheckpoint) {
+      // Sau compaction, update cũ có thể chỉ còn trong summary → so lại với system prompt gốc.
+      live.known = live.instructions
+      live.knownCheckpoint = live.compaction?.id
+    }
+    const current = await this.contextSources(live.agent)
+    const since = live.knownAt
+    // Index knowledge không có tác giả riêng: là "của mình" nếu mọi tài liệu đổi từ lần trước đều do agent này ghi.
+    const knowledgeBySelf = () => {
+      const recent = workspace.knowledge(this.cfg.docs).filter((f) => f.updatedAt >= since)
+      return recent.length > 0 && recent.every((f) => f.author === live.agent.id)
+    }
+    const self = (s: InstructionSource) => (s.id === "workspace/knowledge" ? knowledgeBySelf() : s.author !== undefined && s.author === live.agent.id)
+    const baseline = live.known
+    const fresh = changed(baseline, current).filter((s) => !self(s))
+    const docPath: Record<string, string> = { "workspace/company": workspace.FILES.company, "workspace/user": workspace.FILES.user, "workspace/memory": workspace.FILES.memory }
+    const gone = removed(baseline, current).filter((s) => !self({ ...s, author: docPath[s.id] ? this.cfg.docs.get(docPath[s.id]!)?.author : undefined }))
+    live.known = current
+    live.knownAt = Date.now()
+    if (fresh.length === 0 && gone.length === 0) return
+    const ids = new Set([...fresh, ...gone].map((s) => s.id))
+    const notice = updateNotice(
+      baseline.filter((s) => ids.has(s.id)),
+      fresh,
+    )
+    if (!notice) return
+    live.inbox.pushFront("queue", { id: id("msg"), role: "user", source: "system", createdAt: Date.now(), parts: [{ type: "text", text: notice }] })
+  }
+
   wake(live: Live): Promise<Outcome> {
     if (live.running) return live.running
     live.abort = new AbortController()
@@ -196,7 +246,10 @@ export class Harness {
     }
     live.lastError = undefined
     this.cfg.events.onTurnStart?.(live.session.id)
-    live.running = runTurn(ctx)
+    // Chỉ khi có việc thật: workspace-update một mình không được tự kích hoạt một lượt (tốn tiền).
+    const refresh = live.inbox.size > 0 ? this.refreshContext(live) : Promise.resolve()
+    live.running = refresh
+      .then(() => runTurn(ctx))
       .then(async (outcome) => {
         live.estimate = ctx.estimate
         live.compaction = ctx.compactionSummary

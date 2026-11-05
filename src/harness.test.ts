@@ -27,6 +27,7 @@ import { buildProviders, ConfigSchema, expandEnv } from "./config.ts"
 import { memory } from "./tool/builtin/memory.ts"
 import { fitForSummary, isOverflow, prune } from "./context/compaction.ts"
 import type { Message } from "./core/types.ts"
+import { updateNotice } from "./context/instructions.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -870,4 +871,77 @@ test("compaction helpers: skill outputs become SKILL_PRUNED, overflow messages r
   assert.ok(tokens <= 10_000, `fitted ${tokens}`)
   assert.equal(fitted[0]!.id, "u0", "first messages kept")
   assert.equal(fitted.at(-1)!.parts[0]!.type === "text" && (fitted.at(-1)!.parts[0] as { text: string }).text.length, 8_000, "latest message intact")
+})
+
+// ---- Tài liệu đổi giữa phiên ----------------------------------------------------
+
+const updateText = (req: ModelRequest) =>
+  req.messages.flatMap((m) => m.parts.flatMap((p) => (p.type === "text" && p.text.includes("<workspace-update>") ? [p.text] : [])))
+
+test("mid-session change: CEO edits COMPANY.md → next turn gets one <workspace-update>, system prompt unchanged", async () => {
+  const provider = scripted([])
+  const { harness, docs, cleanup } = await setup(provider)
+  try {
+    docs.put("COMPANY.md", "# Company\nWe sell coffee.\nPrices in VND.", "ceo")
+    const s = await harness.createSession({ agent: "cto" })
+    await harness.send(s.session.id, "hi")
+    const system0 = provider.requests[0]!.system
+    assert.equal(updateText(provider.requests[0]!).length, 0)
+
+    docs.put("COMPANY.md", "# Company\nWe sell tea.\nPrices in VND.", "ceo")
+    await harness.send(s.session.id, "what do we sell?")
+    const r1 = provider.requests[1]!
+    assert.deepEqual(r1.system, system0, "system prompt frozen (prompt cache)")
+    const updates = updateText(r1)
+    assert.equal(updates.length, 1)
+    assert.match(updates[0]!, /COMPANY\.md/)
+    assert.match(updates[0]!, /We sell tea/)
+    // Notice đứng trước câu hỏi của CEO để model đọc bối cảnh mới trước.
+    const texts = r1.messages.map((m) => (m.parts[0]?.type === "text" ? m.parts[0].text : ""))
+    assert.ok(texts.findIndex((t) => t.includes("<workspace-update>")) < texts.findIndex((t) => t === "what do we sell?"))
+
+    await harness.send(s.session.id, "thanks")
+    assert.equal(updateText(provider.requests[2]!).length, 1, "not repeated on later turns")
+  } finally {
+    await cleanup()
+  }
+})
+
+test("mid-session change: new skill and knowledge reach employees; the agent's own edits are not echoed back", async () => {
+  const provider = scripted([
+    () => [{ type: "tool-call", callID: "w1", name: "knowledge", args: { action: "save", path: "pricing.md", content: "# Pricing\nTea 30k" } }, finish("tool-calls")],
+  ])
+  const { harness, skills, cleanup } = await setup(provider)
+  try {
+    const cto = await harness.createSession({ agent: "cto" })
+    const writer = await harness.createSession({ agent: "writer" })
+    await harness.send(cto.session.id, "save pricing")
+    await skills.write("press-release", "---\nname: Press release\ndescription: How we write press releases\n---\nSteps.")
+
+    const before = provider.requests.length
+    await harness.send(cto.session.id, "next")
+    const ctoUpdate = updateText(provider.requests[before]!).join("\n")
+    assert.match(ctoUpdate, /press-release/, "CTO told about the skill the CEO added")
+    assert.doesNotMatch(ctoUpdate, /pricing\.md/, "CTO wrote pricing.md itself; no echo")
+
+    const n = provider.requests.length
+    await harness.send(writer.session.id, "write something")
+    const writerUpdate = updateText(provider.requests[n]!).join("\n")
+    assert.match(writerUpdate, /knowledge\/pricing\.md/)
+    assert.match(writerUpdate, /press-release/)
+  } finally {
+    await cleanup()
+  }
+})
+
+test("workspace update helpers: line diff for long docs, removal notice, nothing when unchanged", () => {
+  const long = Array.from({ length: 80 }, (_, i) => `Line ${i} of the company handbook with some words.`).join("\n")
+  const src = (content: string) => ({ id: "workspace/company", content, hash: content.length + ":" + content.slice(-20) })
+  const edited = long.replace("Line 40 of", "Line 40 (revised) of")
+  const notice = updateNotice([src(long)], [src(edited)])!
+  assert.match(notice, /- Line 40 of/)
+  assert.match(notice, /\+ Line 40 \(revised\) of/)
+  assert.ok(notice.length < 1_000, "diff, not the whole document")
+  assert.match(updateNotice([src(long)], [])!, /removed or emptied/)
+  assert.equal(updateNotice([src(long)], [src(long)]), undefined)
 })

@@ -110,6 +110,7 @@ const LABELS: Record<string, string> = {
   "workspace/memory": "MEMORY.md (<memory>)",
   "workspace/knowledge": "The knowledge index (<knowledge>)",
   "skills/index": "The skills list (<available_skills>)",
+  "core/environment": "The environment block (<env>)",
 }
 
 function describe(id: string) {

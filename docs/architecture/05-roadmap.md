@@ -28,7 +28,7 @@
 - [x] Độ bền loop: vá tool-call mồ côi, báo model sau crash (không tự chạy tiếp), giữ ước lượng khi proxy không trả usage, `Retry-After`, stream đứt sau tool-call, dừng CTO dừng luôn nhân viên foreground — xem `01-agent-loop.md`
 - [x] Compaction đủ dùng: overflow recovery (shrink 0.85/0.7/0.5), request tóm tắt tự co cho vừa, retry khi thiếu heading + checkpoint dựng tay, `compaction.model`, memory flush, `[SKILL_PRUNED]`, re-anchor — xem `03-context-engineering.md`
 - [ ] Compaction: `/compact [focus]` thủ công, precompute nền, bỏ ảnh cũ
-- [ ] Tài liệu đổi giữa phiên (COMPANY/knowledge/skills) → inject diff qua message (`changed()` đã có, chưa nối)
+- [x] Tài liệu đổi giữa phiên (COMPANY/USER/MEMORY/knowledge/skills) → `<workspace-update>` qua message, system giữ nguyên, không báo lại thay đổi của chính agent — xem `03-context-engineering.md`
 - [ ] Memory flush trước compaction; daily notes
 - [ ] Workspace file đổi giữa phiên → inject diff
 - [ ] Provider Anthropic; fallback theo list `agent.model`
