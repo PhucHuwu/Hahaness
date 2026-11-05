@@ -79,6 +79,8 @@ Không có shell, không edit code. Mọi tool file bị chặn trong workspace 
 | `memory` | list/add/replace/remove MEMORY.md | `memory` | CTO |
 | `delegate` | list/spawn/steer/stop nhân viên | `delegate` | CTO |
 | `hire` | tạo vai mới, ghi `staff/<id>.md` | `hire` | CTO |
+| `skill` | load thân `skills/<id>/SKILL.md` | `skill` | mọi vai |
+| `<server>_<tool>` | tool từ MCP server (xem `07-ui-server.md`) | `mcp:<server>:<tool>` | mọi vai, trừ khi vai deny `mcp:*` |
 
 ## Permission cho người dùng no-code
 

@@ -35,6 +35,8 @@ Người dùng no-code "dạy" công ty bằng 2 file markdown, harness tự t�
 | `COMPANY.md` | mọi vai | công ty làm gì, sản phẩm, khách hàng, giọng văn | 20k chars |
 | `USER.md` | CTO | CEO là ai, muốn báo cáo thế nào, ghét gì | 20k |
 | `MEMORY.md` | CTO | CTO tự ghi qua tool `memory`, mục ngăn bằng `§` | 4k, bỏ cũ nhất khi đầy |
+| `knowledge/**` | mọi vai | chỉ **index** `<knowledge>` (path + dòng đầu); nội dung đọc bằng `read` | 60 file trong index |
+| `skills/*/SKILL.md` | mọi vai | chỉ **index** `<available_skills>` ở Tier A; thân load bằng tool `skill` | — |
 
 - Nhân viên không thấy `USER.md`/`MEMORY.md`: họ không cần biết sếp, và giảm rò rỉ sở thích cá nhân vào bài viết.
 - Mỗi source hash SHA-256, baseline lưu theo session. Đổi giữa phiên → (v0.2) push steer message chứa diff, không rewrite system.
