@@ -1,4 +1,4 @@
-import type { Message, Outcome, Part, Session } from "./types.ts"
+import type { Message, Outcome, Part, Session, Usage, UsageRecord } from "./types.ts"
 import type { ModelRequest, ProviderClient, StreamEvent } from "../provider/types.ts"
 import type { Tool, ToolContext } from "../tool/define.ts"
 import { executeTool } from "../tool/execute.ts"
@@ -37,6 +37,7 @@ export interface LoopEvents {
   onSession?(session: Session): void
   onTurnStart?(sessionID: string): void
   onTurnEnd?(sessionID: string, outcome: Outcome): void
+  onUsage?(sessionID: string, usage: UsageRecord): void
 }
 
 export interface TurnContext {
@@ -60,6 +61,8 @@ export interface TurnContext {
   fallbacks?: Array<{ ref: string; provider: ProviderClient; model: string }>
   onModelSwitch?(ref: string): void
   saveOutput?: (callID: string, output: string) => string
+  /** Sổ token của phiên (mọi lần gọi model); loop ghi thêm vào đây và vào store. */
+  usage?: UsageRecord[]
   events: LoopEvents
   signal: AbortSignal
 }
@@ -286,9 +289,19 @@ async function runStep(ctx: TurnContext, step: number, guard: DoomGuard, retryCo
       }
       case "finish":
         finish = ev
+        await recordUsage(ctx, ctx.model, "turn", ev.usage)
         break
     }
   }
+}
+
+/** Provider không trả usage (0/0) thì không ghi: con số 0 làm sai thống kê hơn là thiếu dòng. */
+async function recordUsage(ctx: TurnContext, model: string, purpose: UsageRecord["purpose"], u: Usage) {
+  if (!u.inputTokens && !u.outputTokens) return
+  const record: UsageRecord = { at: Date.now(), model, purpose, inputTokens: u.inputTokens, outputTokens: u.outputTokens, ...(u.cacheReadTokens ? { cacheReadTokens: u.cacheReadTokens } : {}) }
+  ctx.usage?.push(record)
+  await ctx.store.addUsage(ctx.sessionID, record)
+  ctx.events.onUsage?.(ctx.sessionID, record)
 }
 
 function launchTool(ctx: TurnContext, ev: Extract<StreamEvent, { type: "tool-call" }>, serial: { p: Promise<void>; endTurn?: boolean }): Promise<Part> {
@@ -367,7 +380,7 @@ async function summarizeFitted(ctx: TurnContext, c: { provider: ProviderClient; 
   const room = ceiling(info.contextWindow) - systemTokens - SUMMARY_MAX_OUTPUT
   for (const f of [1, ...OVERFLOW_SHRINK.slice(1)]) {
     try {
-      return await summarize(c.provider, c.model, ctx.system, fitForSummary(input, Math.max(2_000, Math.floor(room * f))), ctx.signal)
+      return await summarize(c.provider, c.model, ctx.system, fitForSummary(input, Math.max(2_000, Math.floor(room * f))), ctx.signal, (u) => recordUsage(ctx, c.model, "compaction", u))
     } catch (e) {
       if (!isOverflow((e as Error).message) || f === OVERFLOW_SHRINK.at(-1)) throw e
     }
@@ -405,6 +418,7 @@ async function flushMemory(ctx: TurnContext) {
       for await (const ev of ctx.provider.stream({ model: ctx.model, system: ctx.system, messages: convo, tools, toolChoice: "auto", maxOutputTokens: 2_000 }, ctx.signal)) {
         if (ev.type === "text-delta") text += ev.text
         else if (ev.type === "tool-call") calls.push(ev)
+        else if (ev.type === "finish") await recordUsage(ctx, ctx.model, "memory", ev.usage)
         else if (ev.type === "error") throw ev.error
       }
       if (calls.length === 0 || text.trim() === NO_REPLY) return

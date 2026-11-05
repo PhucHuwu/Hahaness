@@ -1,5 +1,5 @@
 import type { Db } from "./db.ts"
-import type { Compaction, Message, Part, Session, StoreEvent } from "./types.ts"
+import type { Compaction, Message, Part, Session, StoreEvent, UsageRecord } from "./types.ts"
 
 /**
  * Event log append-only trong SQLite (bảng `events`), một dòng mỗi event.
@@ -16,6 +16,11 @@ export class SessionStore {
   async read(sessionID: string): Promise<StoreEvent[]> {
     const rows = this.db.sql.prepare("SELECT data FROM events WHERE session_id = ? ORDER BY seq").all(sessionID) as Array<{ data: string }>
     return rows.map((r) => JSON.parse(r.data) as StoreEvent)
+  }
+
+  async usage(sessionID: string): Promise<UsageRecord[]> {
+    const rows = this.db.sql.prepare("SELECT data FROM events WHERE session_id = ? AND kind = 'usage' ORDER BY seq").all(sessionID) as Array<{ data: string }>
+    return rows.map((r) => (JSON.parse(r.data) as { usage: UsageRecord }).usage)
   }
 
   /** Mọi phiên đã lưu, mới nhất trước. */
@@ -58,6 +63,10 @@ export class SessionStore {
     await this.append(sessionID, { kind: "compaction", compaction })
   }
 
+  async addUsage(sessionID: string, usage: UsageRecord) {
+    await this.append(sessionID, { kind: "usage", usage })
+  }
+
   async claim(sessionID: string) {
     await this.append(sessionID, { kind: "claim", at: Date.now() })
   }
@@ -71,6 +80,7 @@ export interface SessionState {
   session: Session
   messages: Message[]
   compactions: Compaction[]
+  usage: UsageRecord[]
   /** true nếu có claim chưa release → turn trước bị cắt giữa chừng. */
   staleClaim: boolean
 }
@@ -79,6 +89,7 @@ export function fold(events: StoreEvent[]): SessionState {
   let session: Session | undefined
   const messages = new Map<string, Message>()
   const compactions: Compaction[] = []
+  const usage: UsageRecord[] = []
   let claimed = false
   for (const e of events) {
     switch (e.kind) {
@@ -94,6 +105,9 @@ export function fold(events: StoreEvent[]): SessionState {
       case "compaction":
         compactions.push(e.compaction)
         break
+      case "usage":
+        usage.push(e.usage)
+        break
       case "claim":
         claimed = true
         break
@@ -103,5 +117,5 @@ export function fold(events: StoreEvent[]): SessionState {
     }
   }
   if (!session) throw new Error("store: missing session event")
-  return { session, messages: [...messages.values()], compactions, staleClaim: claimed }
+  return { session, messages: [...messages.values()], compactions, usage, staleClaim: claimed }
 }

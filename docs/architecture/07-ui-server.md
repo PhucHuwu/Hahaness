@@ -14,7 +14,7 @@ ui/ (React + Vite, build tĩnh)  ──HTTP JSON + SSE──▶  src/server/ (no
 ```
 
 - **Server không có framework.** `src/server/http.ts` = router pattern `:param`, JSON body, SSE bus, static. ~150 dòng.
-- **Một luồng SSE `/api/events` cho cả app.** Mọi `LoopEvents` (text, tool-start/end, notice) + harness-level (`session`, `turn`, `question`) phát qua đây kèm `sessionID`; UI lọc theo phiên đang xem. Không có kênh riêng per-session → đơn giản, và trang Chat thấy được cả nhân viên con.
+- **Một luồng SSE `/api/events` cho cả app.** Mọi `LoopEvents` (text, tool-start/end, notice, usage) + harness-level (`session`, `turn`, `question`) phát qua đây kèm `sessionID`; UI lọc theo phiên đang xem. Không có kênh riêng per-session → đơn giản, và trang Chat thấy được cả nhân viên con.
 - **`src/bootstrap.ts`** là wiring chuẩn: mở DB (`dbPath` / `HAHANESS_DB` / `.hahaness/hahaness.db`), tạo mẫu COMPANY/USER/MEMORY nếu thiếu, đọc config từ DB, rồi dựng documents, vai, tool, skills, MCP, harness. Server gọi; test server cũng gọi. Không có CLI: web là giao diện duy nhất. `close()` là async (dừng MCP, đóng DB).
 - **Transcript hiển thị = messages trong store.** UI reducer (`ui/src/pages/chat-state.ts`) áp SSE lên mảng `Message` theo đúng cấu trúc store (assistant có parts text/tool-call/tool-result), nên reload trang render giống hệt lúc stream.
 - **Provider lỗi không làm server chết.** `App.providerError` được giữ; `/api/config` trả về, Settings hiển thị, gửi tin nhắn trả 409. Lưu config → `Harness.reconfigure()` dựng provider mới; phiên đang sống giữ model cũ (system prompt/model đóng băng per-session — nhất quán với `03`).

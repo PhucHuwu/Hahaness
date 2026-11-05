@@ -13,11 +13,12 @@ const SKILLS_SOURCE = "skills/index"
 export const RESUMED_AFTER_CRASH =
   "[harness] Your previous turn in this conversation was cut off (the app was restarted). Tool calls marked \"interrupted\" may or may not have taken effect; check the workspace before redoing them."
 import { SessionStore } from "./core/store.ts"
-import type { Compaction, Message, Outcome, Session } from "./core/types.ts"
+import type { Compaction, Message, Outcome, Session, UsageRecord } from "./core/types.ts"
+import { addTotals, contextBreakdown, summarizeUsage, type ContextBreakdown, type UsageSummary, type UsageTotals } from "./context/usage.ts"
 import { build as buildSystem } from "./context/system.ts"
 import { changed, environment, removed, updateNotice, type InstructionSource } from "./context/instructions.ts"
 import * as workspace from "./context/workspace.ts"
-import { estimateMessage } from "./context/budget.ts"
+import { ceiling, estimateMessage } from "./context/budget.ts"
 import { AskGate, type AskHandler } from "./permission/ask.ts"
 import { denied, evaluate, inherit, type Ruleset } from "./permission/ruleset.ts"
 import type { ProviderRegistry } from "./provider/registry.ts"
@@ -55,6 +56,8 @@ interface Live {
   messages: Message[]
   compaction?: Compaction
   estimate: { measured: number; estimated: number }
+  /** Mọi lần gọi model của phiên (token thật provider trả về). */
+  usage: UsageRecord[]
   system: string[]
   /** Nguồn đã dựng system prompt (đóng băng cả phiên). */
   instructions: InstructionSource[]
@@ -117,6 +120,7 @@ export class Harness {
     const agent = this.cfg.agents.get(state.session.agent)
     const live = await this.activate(state.session, agent, {})
     live.messages.push(...state.messages)
+    live.usage.push(...state.usage)
     live.compaction = state.compactions.at(-1)
     // System vừa dựng lại từ workspace hiện tại → không cần báo gì cho tới khi tài liệu đổi tiếp.
     live.knownCheckpoint = live.compaction?.id
@@ -140,6 +144,7 @@ export class Harness {
       inbox: new Inbox(),
       messages: [],
       estimate: { measured: 0, estimated: 0 },
+      usage: [],
       system: buildSystem({ agent, instructions: instructions.filter((s) => s !== skills), skillsIndex: skills?.content }),
       instructions,
       known: instructions,
@@ -235,8 +240,7 @@ export class Harness {
       askGate: this.askGate,
       harness: this,
     }
-    // `ask_lead` chỉ có nghĩa khi có người giao việc. Không lọc bằng rule deny: phiên con thừa kế mọi deny của cha.
-    const tools = this.cfg.tools.snapshot(live.ruleset).tools.filter((t) => t.name !== "ask_lead" || !!live.session.parentID)
+    const tools = this.toolsFor(live)
     const [resolved, ...fallbacks] = this.modelChain(live)
     if (!resolved) {
       live.lastError = `no usable model for ${live.session.model}`
@@ -250,13 +254,14 @@ export class Harness {
       fallbacks,
       onModelSwitch: (ref) => (live.activeModel = ref),
       system: live.system,
-      tools: [...tools, ...live.extraTools],
+      tools,
       toolContext: { ...toolContextBase, ask: makeAsk({ ...toolContextBase, signal: live.abort.signal }, live.saved) },
       inbox: live.inbox,
       store: this.store,
       messages: live.messages,
       compactionSummary: live.compaction,
       estimate: live.estimate,
+      usage: live.usage,
       summarizer: this.summarizer(live.session.id),
       memoryFlush: this.cfg.compaction?.memoryFlush,
       saveOutput: (callID, output) => this.cfg.docs.put(`tool-output/${callID}.txt`, output, live.agent.id),
@@ -287,6 +292,69 @@ export class Harness {
         return outcome
       })
     return live.running
+  }
+
+  /** `ask_lead` chỉ có nghĩa khi có người giao việc. Không lọc bằng rule deny: phiên con thừa kế mọi deny của cha. */
+  private toolsFor(live: Live): Tool[] {
+    return [...this.cfg.tools.snapshot(live.ruleset).tools.filter((t) => t.name !== "ask_lead" || !!live.session.parentID), ...live.extraTools]
+  }
+
+  /**
+   * Báo cáo token của phiên: số thật provider trả về (theo mục đích, theo model) + ước lượng context
+   * hiện tại chia theo loại nội dung + tổng của nhân viên (phiên con, đệ quy).
+   * Phiên không sống thì không có system/tools → chỉ chia phần messages.
+   */
+  async usageReport(sessionID: string): Promise<UsageReport> {
+    const live = this.live.get(sessionID)
+    let records: UsageRecord[]
+    let breakdown: ContextBreakdown
+    let contextWindow: number | undefined
+    let model: string
+    if (live) {
+      records = live.usage
+      const messages = fromCheckpoint(live.messages, live.compaction)
+      breakdown = contextBreakdown(live.system, this.toolsFor(live).map((t) => t.definition()), messages, live.compaction?.id)
+      model = live.activeModel ?? live.session.model
+      try {
+        contextWindow = this.cfg.providers.resolve(model).info.contextWindow
+      } catch {}
+    } else {
+      const state = await this.store.load(sessionID)
+      if (!state) throw new Error(`no stored session ${sessionID}`)
+      records = state.usage
+      const compaction = state.compactions.at(-1)
+      breakdown = contextBreakdown([], [], fromCheckpoint(state.messages, compaction), compaction?.id)
+      model = state.session.model
+      try {
+        contextWindow = this.cfg.providers.resolve(model).info.contextWindow
+      } catch {}
+    }
+    const children = await this.childUsage(sessionID)
+    return {
+      sessionID,
+      model,
+      contextWindow,
+      ceiling: contextWindow ? ceiling(contextWindow) : undefined,
+      estimatedContext: breakdown.categories.reduce((n, c) => n + c.tokens, 0),
+      live: !!live,
+      ...summarizeUsage(records),
+      context: breakdown,
+      children,
+    }
+  }
+
+  private async childUsage(parentID: string): Promise<UsageReport["children"]> {
+    const stored = await this.store.listSessions()
+    const ids = new Set([...stored.filter((s) => s.parentID === parentID).map((s) => s.id), ...this.list().filter((l) => l.session.parentID === parentID).map((l) => l.session.id)])
+    const out: UsageReport["children"] = []
+    for (const id of ids) {
+      const live = this.live.get(id)
+      const session = live?.session ?? stored.find((s) => s.id === id)!
+      const own = summarizeUsage(live?.usage ?? (await this.store.usage(id))).total
+      const nested = await this.childUsage(id)
+      out.push({ sessionID: id, agent: session.agent, title: session.title, total: nested.reduce((t, c) => addTotals(t, c.total), own) })
+    }
+    return out
   }
 
   interrupt(sessionID: string) {
@@ -484,6 +552,20 @@ export interface Brief {
   context: string
   done_when: string
   output?: string
+}
+
+export interface UsageReport extends UsageSummary {
+  sessionID: string
+  model: string
+  contextWindow?: number
+  /** Ngưỡng tự compact. */
+  ceiling?: number
+  /** Tổng các mục trong `context` (ước lượng ký tự/4). */
+  estimatedContext: number
+  live: boolean
+  context: ContextBreakdown
+  /** Phiên nhân viên, tổng đã gồm cả nhân viên cấp dưới của họ. */
+  children: Array<{ sessionID: string; agent: string; title: string; total: UsageTotals }>
 }
 
 export interface ResultEntry {

@@ -3,6 +3,7 @@ import { api, ApiError, type Message, type Part, type Question, type SessionDeta
 import { useServerEvents } from "../events.ts"
 import { applyEvent, userMessage, type ChatState } from "./chat-state.ts"
 import { Comms } from "./Comms.tsx"
+import { SessionUsage } from "./Usage.tsx"
 
 export function Chat({ sessionID }: { sessionID?: string }) {
   const [sessions, setSessions] = useState<SessionView[]>([])
@@ -234,6 +235,7 @@ function Conversation({ sessionID, staff }: { sessionID: string; staff: Staff[] 
             {[detail.session.parentID ? "được giao việc" : isPrimary ? undefined : "trò chuyện riêng với bạn", detail.session.model].filter(Boolean).join(" · ")}
           </span>
         </div>
+        <SessionUsage sessionID={sessionID} agentName={agentName} />
         {state.running ? (
           <>
             <span className="badge ok">đang làm việc</span>

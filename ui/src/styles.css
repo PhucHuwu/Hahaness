@@ -203,3 +203,20 @@ th { font-weight: 500; color: var(--ink-2); font-size: 12px; }
   .chat-side { display: none; }
   .split { grid-template-columns: 1fr; }
 }
+
+.chat-head { position: relative; }
+.usage-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--bg); border-radius: var(--r); padding: 3px 8px; font: inherit; font-size: 12px; color: var(--ink-2); cursor: pointer; font-variant-numeric: tabular-nums; }
+.usage-chip:hover { border-color: var(--line-2); }
+.usage-chip.warn { border-color: var(--warn); color: var(--warn); }
+.usage-mini { display: inline-block; width: 42px; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.usage-mini > span { display: block; height: 100%; background: var(--accent); }
+.usage-chip.warn .usage-mini > span { background: var(--warn); }
+.usage-panel { position: absolute; top: calc(100% + 4px); right: 20px; z-index: 10; width: min(560px, calc(100% - 40px)); max-height: 70vh; overflow: auto; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08); padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+.usage-panel h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.usage-bar { display: flex; height: 10px; border-radius: 3px; overflow: hidden; background: var(--line); margin: 8px 0; }
+.usage-bar > span { display: block; height: 100%; min-width: 2px; }
+.usage-table { font-size: 12.5px; margin-top: 4px; }
+.usage-table td, .usage-table th { padding: 3px 4px; text-align: left; }
+.usage-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-table tr.sum td { border-top: 1px solid var(--line); font-weight: 600; }
+.usage-table .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }

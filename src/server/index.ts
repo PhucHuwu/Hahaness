@@ -64,6 +64,7 @@ export async function startServer(opts: ServerOptions) {
       },
       onToolEnd: (sessionID, name, output, isError, callID) => bus.emit({ type: "tool-end", sessionID, name, output: output.slice(0, 4000), isError, callID }),
       onNotice: (sessionID, text) => bus.emit({ type: "notice", sessionID, text }),
+      onUsage: (sessionID, usage) => bus.emit({ type: "usage", sessionID, usage }),
       onSession: (session) => bus.emit({ type: "session", session: sessionView(app, session) }),
       onTurnStart: (sessionID) => bus.emit({ type: "turn", sessionID, running: true }),
       onTurnEnd: (sessionID, outcome) => bus.emit({ type: "turn", sessionID, running: false, outcome: outcome.tag, error: outcome.tag === "failed" ? outcome.error.message : undefined }),

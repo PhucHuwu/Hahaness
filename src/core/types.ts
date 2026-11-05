@@ -56,10 +56,18 @@ export interface Compaction {
   createdAt: number
 }
 
+/** Một lần gọi model, số token do provider trả về. `purpose` tách lượt chat khỏi các lần gọi phụ. */
+export interface UsageRecord extends Usage {
+  at: number
+  model: string
+  purpose: "turn" | "compaction" | "memory"
+}
+
 export type StoreEvent =
   | { kind: "session"; session: Session }
   | { kind: "message"; message: Message }
   | { kind: "part"; messageID: string; part: Part }
   | { kind: "compaction"; compaction: Compaction }
+  | { kind: "usage"; usage: UsageRecord }
   | { kind: "claim"; at: number }
   | { kind: "release"; at: number }

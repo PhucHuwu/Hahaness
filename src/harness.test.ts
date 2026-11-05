@@ -573,6 +573,53 @@ test("crash resume: dangling tool-call gets an interrupted result, model is told
   }
 })
 
+test("usage: every model call is recorded and persisted; report splits context by kind and per tool; child totals roll up", async () => {
+  const used = (input: number, output: number, cacheRead?: number): StreamEvent => ({ type: "finish", reason: "tool-calls", usage: { inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead } })
+  const provider = scripted([
+    () => [{ type: "tool-call", callID: "c1", name: "echo", args: { text: "x".repeat(400) } }, used(1000, 50, 800)],
+    () => [{ type: "tool-call", callID: "d1", name: "delegate", args: { action: "spawn", agent: "researcher", brief: { goal: "g", context: "c", done_when: "d" } } }, used(1200, 40)],
+    () => [{ type: "text-delta", text: "found" }, { type: "finish", reason: "stop", usage: { inputTokens: 300, outputTokens: 7 } }],
+    () => [{ type: "text-delta", text: "done" }, { type: "finish", reason: "stop", usage: { inputTokens: 0, outputTokens: 0 } }],
+  ])
+  const seen: number[] = []
+  const { harness, cleanup } = await setup(provider)
+  harness.cfg.events.onUsage = (_, u) => seen.push(u.inputTokens)
+  try {
+    const main = await harness.createSession({ agent: "cto" })
+    assert.equal((await harness.send(main.session.id, "hello")).tag, "completed")
+    // Lần gọi cuối provider trả 0/0 → không ghi.
+    assert.deepEqual(seen, [1000, 1200, 300])
+
+    const r = await harness.usageReport(main.session.id)
+    assert.deepEqual(r.total, { calls: 2, inputTokens: 2200, outputTokens: 90, cacheReadTokens: 800 })
+    assert.equal(r.byPurpose.turn.calls, 2)
+    assert.equal(r.lastInput, 1200)
+    assert.equal(r.ceiling, 84_000)
+    const cat = Object.fromEntries(r.context.categories.map((c) => [c.key, c.tokens]))
+    for (const k of ["system", "tools", "user", "tool-calls", "tool-results", "assistant"]) assert.ok(cat[k]! > 0, `${k} should be counted`)
+    assert.equal(r.estimatedContext, r.context.categories.reduce((n, c) => n + c.tokens, 0))
+    const echo = r.context.tools.find((t) => t.name === "echo")!
+    assert.equal(echo.calls, 1)
+    assert.ok(echo.callTokens >= 100 && echo.resultTokens >= 100)
+    assert.equal(r.children.length, 1)
+    assert.equal(r.children[0]!.agent, "researcher")
+    assert.deepEqual(r.children[0]!.total, { calls: 1, inputTokens: 300, outputTokens: 7, cacheReadTokens: 0 })
+
+    // Đọc từ store (phiên không sống): số thật còn nguyên, phần system/tools không có.
+    const fresh = new Harness({ ...harness.cfg })
+    const stored = await fresh.usageReport(main.session.id)
+    assert.equal(stored.live, false)
+    assert.deepEqual(stored.total, r.total)
+    assert.ok(!stored.context.categories.some((c) => c.key === "system" || c.key === "tools"))
+    assert.equal(stored.children[0]!.total.inputTokens, 300)
+    // Resume nạp lại sổ token.
+    await fresh.resume(main.session.id)
+    assert.equal((await fresh.usageReport(main.session.id)).total.calls, 2)
+  } finally {
+    await cleanup()
+  }
+})
+
 test("budget: provider without usage keeps the running estimate instead of resetting to 0", async () => {
   const noUsage: StreamEvent = { type: "finish", reason: "stop", usage: { inputTokens: 0, outputTokens: 0 } }
   const provider = scripted([() => [{ type: "text-delta", text: "x".repeat(4000) }, noUsage]])
@@ -702,6 +749,23 @@ async function longChat(harness: Harness, n = 5) {
   for (let i = 1; i <= n; i++) await harness.send(s.session.id, `request ${i}: ` + "x".repeat(20_000))
   return s
 }
+
+test("usage: compaction summary calls are recorded under their own purpose; checkpoint shows in the breakdown", async () => {
+  const provider = windowed(40_000, (req) =>
+    isSummaryReq(req) ? [{ type: "text-delta", text: GOOD_SUMMARY }, { type: "finish", reason: "stop", usage: { inputTokens: 5000, outputTokens: 300 } }] : reply("ok"),
+  )
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const s = await longChat(harness)
+    const r = await harness.usageReport(s.session.id)
+    assert.deepEqual(r.byPurpose.compaction, { calls: 1, inputTokens: 5000, outputTokens: 300, cacheReadTokens: 0 })
+    assert.equal(r.byPurpose.turn.calls, 0, "turn replies reported no usage")
+    assert.equal(r.lastInput, undefined)
+    assert.ok(r.context.categories.some((c) => c.key === "checkpoint"))
+  } finally {
+    await cleanup()
+  }
+})
 
 test("compaction: long conversation compacts, summary request fits the window, next request starts from the checkpoint", async () => {
   const provider = windowed(40_000, (req) => (isSummaryReq(req) ? reply(GOOD_SUMMARY) : reply("ok")))

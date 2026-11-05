@@ -80,6 +80,15 @@ interface Estimate { measured: number; estimated: number }
 - `ceiling = contextWindow − max(0.15 * contextWindow, 16_000)`.
 - `outputLimit = min(maxOutput, contextWindow − total)`.
 
+## Theo dõi token (`context/usage.ts`)
+
+CEO xem token theo phiên ở nút trên đầu khung chat (`GET /api/sessions/:id/usage`). Hai loại số, tách bạch:
+
+1. **Số thật từ provider.** Mỗi lần gọi model mà provider trả `usage` thì loop ghi một event `{ kind: "usage", usage: { at, model, purpose, inputTokens, outputTokens, cacheReadTokens? } }` vào store (`SessionStore.addUsage`) và phát SSE `usage`. `purpose`: `turn` (lượt làm việc), `compaction` (gọi tóm tắt, kể cả `compaction.model`), `memory` (memory flush). Provider trả 0/0 thì không ghi, vì dòng 0 làm sai thống kê. Báo cáo cộng theo mục đích, theo model, và cộng đệ quy các phiên nhân viên (`children`). `lastInput` = input của lượt `turn` gần nhất = context thật.
+2. **Ước lượng theo loại nội dung** (chars/4, cùng heuristic với budget) cho request kế tiếp: vai trò & hướng dẫn (Tier A), tài liệu công ty (Tier B), định nghĩa tool, bản tóm tắt checkpoint, tin của CEO, tin giữa agent, thông báo harness, trả lời agent, lời gọi tool, kết quả tool; thêm bảng theo từng tool (số lần, token args, token kết quả). Provider chỉ trả một con số input tổng nên phần chia loại luôn là ước lượng. Phiên không sống thì không có system/tools (system dựng lại khi resume), chỉ chia phần messages.
+
+Không thêm bảng DB: event `usage` nằm trong bảng `events` như các event khác; `SessionStore.usage()` lọc theo `kind` để tính tổng phiên con mà không fold cả transcript.
+
 ## Compaction (`context/compaction.ts`)
 
 Trigger khi `total >= ceiling` (kiểm tra đầu mỗi step), hoặc provider báo overflow. (`/compact [focus]` thủ công: chưa làm.)

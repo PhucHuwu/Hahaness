@@ -1,4 +1,4 @@
-import type { Compaction, Message, Part } from "../core/types.ts"
+import type { Compaction, Message, Part, Usage } from "../core/types.ts"
 import type { ProviderClient } from "../provider/types.ts"
 import { id } from "../core/id.ts"
 import { estimateMessage } from "./budget.ts"
@@ -116,14 +116,14 @@ export function missingHeadings(text: string) {
 }
 
 /** Pha 3: messages hiện có + summary prompt (cùng prefix → tận dụng cache). Thiếu heading → thử lại 1 lần với nudge. */
-export async function summarize(provider: ProviderClient, model: string, system: string[], messages: Message[], signal: AbortSignal): Promise<string> {
+export async function summarize(provider: ProviderClient, model: string, system: string[], messages: Message[], signal: AbortSignal, onUsage?: (u: Usage) => unknown): Promise<string> {
   const convo = [...messages, userMessage(SUMMARY_PROMPT)]
-  let text = await once(provider, model, system, convo, signal)
+  let text = await once(provider, model, system, convo, signal, onUsage)
   let missing = missingHeadings(text)
   if (missing.length === 0) return text
   if (text) convo.push({ id: id("msg"), role: "assistant", parts: [{ type: "text", text }], createdAt: Date.now() })
   convo.push(userMessage(SUMMARY_NUDGE.replace("{missing}", missing.join(", "))))
-  text = await once(provider, model, system, convo, signal)
+  text = await once(provider, model, system, convo, signal, onUsage)
   missing = missingHeadings(text)
   if (missing.length) throw new SummaryFormatError(`summary missing required headings (${missing.join(", ")})`)
   return text
@@ -131,10 +131,11 @@ export async function summarize(provider: ProviderClient, model: string, system:
 
 export class SummaryFormatError extends Error {}
 
-async function once(provider: ProviderClient, model: string, system: string[], messages: Message[], signal: AbortSignal) {
+async function once(provider: ProviderClient, model: string, system: string[], messages: Message[], signal: AbortSignal, onUsage?: (u: Usage) => unknown) {
   let text = ""
   for await (const ev of provider.stream({ model, system, messages, tools: [], toolChoice: "none", maxOutputTokens: SUMMARY_MAX_OUTPUT }, signal)) {
     if (ev.type === "text-delta") text += ev.text
+    if (ev.type === "finish") await onUsage?.(ev.usage)
     if (ev.type === "error") throw ev.error
   }
   return text.trim()

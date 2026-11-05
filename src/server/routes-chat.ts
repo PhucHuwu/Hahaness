@@ -79,6 +79,14 @@ export function chatRoutes(r: Router, app: App) {
     return { ...sessionView(app, session), messages, children }
   })
 
+  r.get("/api/sessions/:id/usage", async (req) => {
+    try {
+      return await harness.usageReport(req.params.id!)
+    } catch (e) {
+      throw new HttpError(404, (e as Error).message)
+    }
+  })
+
   r.post("/api/sessions/:id/resume", async (req) => {
     if (app.providerError) throw new HttpError(409, app.providerError)
     const live = await harness.resume(req.params.id!)

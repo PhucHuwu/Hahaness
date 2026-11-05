@@ -74,6 +74,42 @@ export interface SessionDetail extends SessionView {
   children: SessionView[]
 }
 
+export interface UsageRecord {
+  at: number
+  model: string
+  purpose: "turn" | "compaction" | "memory"
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens?: number
+}
+
+export interface UsageTotals {
+  calls: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+}
+
+export type ContextCategory = "system" | "workspace" | "tools" | "checkpoint" | "user" | "agent" | "notice" | "assistant" | "tool-calls" | "tool-results"
+
+export interface UsageReport {
+  sessionID: string
+  model: string
+  contextWindow?: number
+  ceiling?: number
+  estimatedContext: number
+  live: boolean
+  total: UsageTotals
+  byPurpose: Record<UsageRecord["purpose"], UsageTotals>
+  byModel: Array<{ model: string } & UsageTotals>
+  lastInput?: number
+  context: {
+    categories: Array<{ key: ContextCategory; tokens: number }>
+    tools: Array<{ name: string; calls: number; callTokens: number; resultTokens: number }>
+  }
+  children: Array<{ sessionID: string; agent: string; title: string; total: UsageTotals }>
+}
+
 export interface Staff {
   id: string
   name: string
@@ -163,6 +199,7 @@ export type ServerEvent =
   | { type: "tool-start"; sessionID: string; name: string; args: unknown; callID: string }
   | { type: "tool-end"; sessionID: string; name: string; output: string; isError: boolean; callID: string }
   | { type: "notice"; sessionID: string; text: string }
+  | { type: "usage"; sessionID: string; usage: UsageRecord }
   | { type: "session"; session: SessionView }
   | { type: "turn"; sessionID: string; running: boolean; outcome?: string; error?: string }
   | { type: "question"; id: string; sessionID: string; kind: "question" | "permission"; text: string; options?: string[] }
