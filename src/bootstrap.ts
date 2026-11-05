@@ -105,6 +105,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
     agents,
     tools,
     skills,
+    compaction: config.compaction,
     permissions: [{ action: "*", resource: "*", effect: "allow" }],
     askHandler: opts.askHandler,
     events: opts.events,

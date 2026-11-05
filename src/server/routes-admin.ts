@@ -50,7 +50,7 @@ export function adminRoutes(r: Router, app: App) {
     saveConfig(db, next)
     try {
       const providers = await buildProviders(next, app.cwd)
-      app.harness.reconfigure({ providers, defaultModel: process.env.HAHANESS_MODEL ?? next.defaultModel })
+      app.harness.reconfigure({ providers, defaultModel: process.env.HAHANESS_MODEL ?? next.defaultModel, compaction: next.compaction })
       app.providerError = undefined
     } catch (e) {
       app.providerError = (e as Error).message

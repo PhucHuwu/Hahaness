@@ -26,7 +26,8 @@
 - [x] Trang Kết quả: xem/chép/tải `.md` deliverables + drafts
 - [ ] Tải kết quả dạng `.docx` / `.pdf`
 - [x] Độ bền loop: vá tool-call mồ côi, báo model sau crash (không tự chạy tiếp), giữ ước lượng khi proxy không trả usage, `Retry-After`, stream đứt sau tool-call, dừng CTO dừng luôn nhân viên foreground — xem `01-agent-loop.md`
-- [ ] Compaction đủ dùng: overflow recovery (shrink/drop), retry khi thiếu heading, `compaction.model`, memory flush
+- [x] Compaction đủ dùng: overflow recovery (shrink 0.85/0.7/0.5), request tóm tắt tự co cho vừa, retry khi thiếu heading + checkpoint dựng tay, `compaction.model`, memory flush, `[SKILL_PRUNED]`, re-anchor — xem `03-context-engineering.md`
+- [ ] Compaction: `/compact [focus]` thủ công, precompute nền, bỏ ảnh cũ
 - [ ] Tài liệu đổi giữa phiên (COMPANY/knowledge/skills) → inject diff qua message (`changed()` đã có, chưa nối)
 - [ ] Memory flush trước compaction; daily notes
 - [ ] Workspace file đổi giữa phiên → inject diff

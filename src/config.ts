@@ -47,7 +47,15 @@ const ProviderSchema = z.discriminatedUnion("type", [
 export const ConfigSchema = z.object({
   defaultModel: z.string().optional(),
   providers: z.record(z.string(), ProviderSchema).default({}),
+  compaction: z
+    .object({
+      model: z.string().optional().describe("provider/model used to write compaction summaries; default: the session's model"),
+      memoryFlush: z.boolean().optional().describe("Let agents with the memory tool save long-term notes before compaction (default true)"),
+    })
+    .optional(),
 })
+
+export type CompactionConfig = NonNullable<z.infer<typeof ConfigSchema>["compaction"]>
 
 export type Config = z.infer<typeof ConfigSchema>
 export type ProviderConfig = z.infer<typeof ProviderSchema>
@@ -82,7 +90,11 @@ export async function loadConfig(cwd: string, db?: Db): Promise<{ config: Config
   const base = existsSync(home) ? ConfigSchema.parse(JSON.parse(await readFile(home, "utf8"))) : undefined
   const local = stored !== undefined ? ConfigSchema.parse(stored) : undefined
   return {
-    config: { defaultModel: local?.defaultModel ?? base?.defaultModel, providers: { ...base?.providers, ...local?.providers } },
+    config: {
+      defaultModel: local?.defaultModel ?? base?.defaultModel,
+      providers: { ...base?.providers, ...local?.providers },
+      compaction: base?.compaction || local?.compaction ? { ...base?.compaction, ...local?.compaction } : undefined,
+    },
     imported,
   }
 }

@@ -24,6 +24,9 @@ import { evaluate, denied } from "./permission/ruleset.ts"
 import { fromMarkdown } from "./agent/registry.ts"
 import { ProviderRegistry } from "./provider/registry.ts"
 import { buildProviders, ConfigSchema, expandEnv } from "./config.ts"
+import { memory } from "./tool/builtin/memory.ts"
+import { fitForSummary, isOverflow, prune } from "./context/compaction.ts"
+import type { Message } from "./core/types.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -682,4 +685,189 @@ test("stop: interrupting the CTO also stops an employee it is waiting on (foregr
   } finally {
     await cleanup()
   }
+})
+
+// ---- Compaction ---------------------------------------------------------------
+
+const GOOD_SUMMARY = "## Objective\nship the report\n## Work State\nhalf done\n## Next Move\nfinish section 3"
+const noUsage = (): StreamEvent => ({ type: "finish", reason: "stop", usage: { inputTokens: 0, outputTokens: 0 } })
+const allText = (req: ModelRequest) => req.messages.flatMap((m) => m.parts.map((p) => (p.type === "text" ? p.text : p.type === "tool-result" ? p.output : ""))).join("\n")
+const isSummaryReq = (req: ModelRequest) => allText(req).includes("Context is about to be compacted")
+const isFlushReq = (req: ModelRequest) => allText(req).includes("Context will be compacted now")
+
+/** Provider với context window tuỳ chọn; usage = 0 để loop dùng ước lượng chars/4. */
+function windowed(contextWindow: number, handler: (req: ModelRequest) => StreamEvent[]): ProviderClient & { requests: ModelRequest[] } {
+  const requests: ModelRequest[] = []
+  return {
+    requests,
+    info: () => ({ id: "mock", contextWindow, maxOutput: 8_000 }),
+    async *stream(req) {
+      requests.push(req)
+      for (const ev of handler(req)) yield ev
+    },
+  }
+}
+
+const reply = (text: string): StreamEvent[] => [{ type: "text-delta", text }, noUsage()]
+
+/** 5 tin nhắn ~5k token mỗi tin vào window 40k (ceiling 24k) → tin thứ 5 kích hoạt compaction. */
+async function longChat(harness: Harness, n = 5) {
+  const s = await harness.createSession({ agent: "cto" })
+  for (let i = 1; i <= n; i++) await harness.send(s.session.id, `request ${i}: ` + "x".repeat(20_000))
+  return s
+}
+
+test("compaction: long conversation compacts, summary request fits the window, next request starts from the checkpoint", async () => {
+  const provider = windowed(40_000, (req) => (isSummaryReq(req) ? reply(GOOD_SUMMARY) : reply("ok")))
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const s = await longChat(harness)
+    const summaries = provider.requests.filter(isSummaryReq)
+    assert.equal(summaries.length, 1)
+    const sumReq = summaries[0]!
+    const sumTokens = sumReq.messages.reduce((n, m) => n + m.parts.reduce((k, p) => k + (p.type === "text" ? p.text.length : 0), 0), 0) / 4
+    assert.ok(sumTokens < 24_000 - 8_000, `summary input ${sumTokens} tokens must leave room in a 40k window`)
+    assert.match(allText(sumReq), /\[clipped\]/)
+    const last = provider.requests.at(-1)!
+    assert.ok(!isSummaryReq(last))
+    const first = last.messages[0]!.parts[0]!
+    assert.ok(first.type === "text" && first.text.includes("<conversation-checkpoint>") && first.text.includes("finish section 3"))
+    assert.match(allText(last), /request 5:/)
+    assert.doesNotMatch(allText(last), /request 1:/)
+    const state = (await harness.store.load(s.session.id))!
+    assert.equal(state.compactions.length, 1)
+    assert.ok(s.estimate.measured + s.estimate.estimated < 24_000, "estimate re-anchored below the ceiling")
+  } finally {
+    await cleanup()
+  }
+})
+
+test("compaction: summary missing headings is retried once with a nudge; still wrong → transcript fallback", async () => {
+  let n = 0
+  const retried = windowed(40_000, (req) => (isSummaryReq(req) ? reply(n++ === 0 ? "Sure! Here is what happened." : GOOD_SUMMARY) : reply("ok")))
+  const a = await setup(retried)
+  try {
+    const s = await longChat(a.harness)
+    const sums = retried.requests.filter(isSummaryReq)
+    assert.equal(sums.length, 2)
+    assert.match(allText(sums[1]!), /missing required headings: ## Objective/)
+    assert.equal((await a.harness.store.load(s.session.id))!.compactions[0]!.summary, GOOD_SUMMARY)
+  } finally {
+    await a.cleanup()
+  }
+
+  const stubborn = windowed(40_000, (req) => (isSummaryReq(req) ? reply("no.") : reply("ok")))
+  const b = await setup(stubborn)
+  try {
+    const s = await longChat(b.harness)
+    assert.equal(stubborn.requests.filter(isSummaryReq).length, 2)
+    const summary = (await b.harness.store.load(s.session.id))!.compactions[0]!.summary
+    assert.match(summary, /reconstructed from the transcript/)
+    assert.match(summary, /request 1:/, "CEO requests kept verbatim (clipped)")
+    assert.match(summary, /## Next Move/)
+  } finally {
+    await b.cleanup()
+  }
+})
+
+test("compaction: compaction.model writes the summary; main model never sees the summary prompt", async () => {
+  const main = windowed(40_000, (req) => (isSummaryReq(req) ? reply("main should not summarize") : reply("ok")))
+  const cheap = windowed(200_000, () => reply(GOOD_SUMMARY))
+  const { harness, agents, cleanup } = await setup(main)
+  try {
+    const h = new Harness({
+      ...harness.cfg,
+      agents,
+      providers: new ProviderRegistry().register("mock", main).register("cheap", cheap),
+      compaction: { model: "cheap/summarizer" },
+    })
+    const s = await longChat(h)
+    assert.equal(main.requests.filter(isSummaryReq).length, 0)
+    assert.equal(cheap.requests.length, 1)
+    assert.equal(cheap.requests[0]!.model, "summarizer")
+    assert.equal((await h.store.load(s.session.id))!.compactions[0]!.summary, GOOD_SUMMARY)
+  } finally {
+    await cleanup()
+  }
+})
+
+test("overflow recovery: provider says context too long → compact and retry; persistent overflow fails instead of looping", async () => {
+  let overflowOnce = true
+  const provider = windowed(100_000, (req) => {
+    if (isSummaryReq(req)) return reply(GOOD_SUMMARY)
+    if (allText(req).includes("request 5:") && overflowOnce) {
+      overflowOnce = false
+      return [{ type: "error", error: new Error("400 This model's maximum context length is 8192 tokens"), retryable: false }]
+    }
+    return reply("ok")
+  })
+  const a = await setup(provider)
+  try {
+    const s = await a.harness.createSession({ agent: "cto" })
+    for (let i = 1; i <= 4; i++) await a.harness.send(s.session.id, `request ${i}: ` + "x".repeat(20_000))
+    const outcome = await a.harness.send(s.session.id, "request 5: " + "x".repeat(20_000))
+    assert.equal(outcome.tag, "completed")
+    assert.equal(provider.requests.filter(isSummaryReq).length, 1)
+    assert.ok(provider.requests.at(-1)!.messages[0]!.parts.some((p) => p.type === "text" && p.text.includes("<conversation-checkpoint>")))
+  } finally {
+    await a.cleanup()
+  }
+
+  const always = windowed(100_000, (req) =>
+    isSummaryReq(req) ? reply(GOOD_SUMMARY) : allText(req).includes("request 5:") ? [{ type: "error", error: new Error("context_length_exceeded"), retryable: false }] : reply("ok"),
+  )
+  const b = await setup(always)
+  try {
+    const s = await b.harness.createSession({ agent: "cto" })
+    for (let i = 1; i <= 4; i++) await b.harness.send(s.session.id, `request ${i}: ` + "x".repeat(20_000))
+    const outcome = await b.harness.send(s.session.id, "request 5: " + "x".repeat(20_000))
+    assert.equal(outcome.tag, "failed")
+    assert.match(outcome.tag === "failed" ? outcome.error.message : "", /context/)
+    assert.ok(always.requests.length < 20, "bounded number of attempts")
+  } finally {
+    await b.cleanup()
+  }
+})
+
+test("memory flush: before compacting, an agent with `memory` saves long-term notes; the flush exchange is not stored", async () => {
+  const provider = windowed(40_000, (req) => {
+    if (isSummaryReq(req)) return reply(GOOD_SUMMARY)
+    if (isFlushReq(req)) {
+      const saved = req.messages.at(-1)!.parts.some((p) => p.type === "tool-result" && p.name === "memory")
+      return saved ? reply("NO_REPLY") : [{ type: "tool-call", callID: "mf1", name: "memory", args: { action: "add", text: "CEO wants reports under one page" } }, noUsage()]
+    }
+    return reply("ok")
+  })
+  const { harness, docs, cleanup } = await setup(provider)
+  try {
+    harness.cfg.tools.register(memory(docs))
+    const s = await longChat(harness)
+    assert.ok(workspace.readMemory(docs).some((e) => e.includes("under one page")))
+    assert.equal(provider.requests.filter(isFlushReq).length, 2)
+    const flushAt = provider.requests.findIndex(isFlushReq)
+    assert.ok(flushAt < provider.requests.findIndex(isSummaryReq), "flush runs before summarize")
+    const stored = (await harness.store.load(s.session.id))!.messages
+    assert.ok(!stored.some((m) => m.parts.some((p) => p.type === "text" && p.text.includes("Context will be compacted now"))))
+  } finally {
+    await cleanup()
+  }
+})
+
+test("compaction helpers: skill outputs become SKILL_PRUNED, overflow messages recognised, summary input fits budget", () => {
+  const big = "y".repeat(8_000)
+  const msgs: Message[] = [
+    { id: "u0", role: "user", createdAt: 0, parts: [{ type: "text", text: "goal" }] },
+    { id: "a0", role: "assistant", createdAt: 0, parts: [{ type: "tool-call", callID: "k", name: "skill", args: { id: "pricing" } }, { type: "tool-result", callID: "k", name: "skill", output: "short skill", isError: false }] },
+    ...Array.from({ length: 30 }, (_, i): Message => ({ id: `m${i}`, role: i % 2 ? "assistant" : "user", createdAt: 0, parts: [{ type: "text", text: big }] })),
+  ]
+  const pruned = prune(msgs)
+  const r = pruned[1]!.parts[1]!
+  assert.ok(r.type === "tool-result" && r.output.startsWith("[SKILL_PRUNED: pricing]"))
+  for (const m of ["context_length_exceeded", "This model's maximum context length is 128000 tokens", "prompt is too long: 210000 tokens > 200000 maximum", "Input exceeds the context window"]) assert.ok(isOverflow(m), m)
+  assert.ok(!isOverflow("429 rate limited"))
+  const fitted = fitForSummary(pruned, 10_000)
+  const tokens = fitted.reduce((n, m) => n + m.parts.reduce((k, p) => k + (p.type === "text" ? p.text.length : p.type === "tool-result" ? p.output.length : 0), 0), 0) / 4
+  assert.ok(tokens <= 10_000, `fitted ${tokens}`)
+  assert.equal(fitted[0]!.id, "u0", "first messages kept")
+  assert.equal(fitted.at(-1)!.parts[0]!.type === "text" && (fitted.at(-1)!.parts[0] as { text: string }).text.length, 8_000, "latest message intact")
 })

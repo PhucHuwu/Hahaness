@@ -3,8 +3,22 @@ import type { ModelRequest, ProviderClient, StreamEvent } from "../provider/type
 import type { Tool, ToolContext } from "../tool/define.ts"
 import { executeTool } from "../tool/execute.ts"
 import { id } from "./id.ts"
-import { ceiling, estimateMessage, outputLimit, type Estimate, total } from "../context/budget.ts"
-import { fromCheckpoint, keepBoundary, prune, summarize } from "../context/compaction.ts"
+import { ceiling, estimateMessage, estimateText, outputLimit, type Estimate, total } from "../context/budget.ts"
+import {
+  KEEP_RECENT_TOKENS,
+  MEMORY_FLUSH_PROMPT,
+  NO_REPLY,
+  OVERFLOW_SHRINK,
+  SUMMARY_MAX_OUTPUT,
+  SummaryFormatError,
+  fallbackSummary,
+  fitForSummary,
+  fromCheckpoint,
+  isOverflow,
+  keepBoundary,
+  prune,
+  summarize,
+} from "../context/compaction.ts"
 import type { Inbox } from "./inbox.ts"
 import type { SessionStore } from "./store.ts"
 import type { AgentDef } from "../agent/types.ts"
@@ -38,6 +52,10 @@ export interface TurnContext {
   messages: Message[]
   compactionSummary?: { summary: string; keepFromID: string; id: string; createdAt: number }
   estimate: Estimate
+  /** Model riêng để tóm tắt khi compaction (rẻ hơn / context lớn hơn); không có thì dùng model của phiên. */
+  summarizer?: { provider: ProviderClient; model: string }
+  /** false → bỏ pha memory flush trước compaction. */
+  memoryFlush?: boolean
   saveOutput?: (callID: string, output: string) => string
   events: LoopEvents
   signal: AbortSignal
@@ -58,6 +76,7 @@ export async function runTurn(ctx: TurnContext): Promise<Outcome> {
   let outputLimitStreak = 0
   let retries = 0
   const guard = new DoomGuard()
+  const compaction: CompactionState = { overflow: 0, step: -2 }
   try {
     while (true) {
       if (ctx.signal.aborted) return { tag: "interrupted" }
@@ -70,7 +89,7 @@ export async function runTurn(ctx: TurnContext): Promise<Outcome> {
         await appendNotice(ctx, WRAPUP_NOTICE)
       }
 
-      const outcome = await runStep(ctx, step, guard, retries)
+      const outcome = await runStep(ctx, step, guard, retries, compaction)
       step++
       switch (outcome.tag) {
         case "continue":
@@ -98,11 +117,22 @@ export async function runTurn(ctx: TurnContext): Promise<Outcome> {
   }
 }
 
-async function runStep(ctx: TurnContext, step: number, guard: DoomGuard, retryCount: number): Promise<Outcome> {
+interface CompactionState {
+  /** Số lần đã nén vì provider báo tràn trong lượt này (index vào OVERFLOW_SHRINK). */
+  overflow: number
+  /** Step gần nhất đã nén; step ngay sau đó không nén theo ước lượng nữa (tránh vòng nén liên tục). */
+  step: number
+}
+
+async function runStep(ctx: TurnContext, step: number, guard: DoomGuard, retryCount: number, cs: CompactionState): Promise<Outcome> {
   const info = ctx.provider.info(ctx.model)
-  if (total(ctx.estimate) >= ceiling(info.contextWindow)) {
-    const ok = await compact(ctx)
-    if (ok) return { tag: "compacted" }
+  // Model context nhỏ: 15k nguyên văn có thể đã quá ceiling → giữ tối đa 40% ceiling.
+  const keepBase = Math.min(KEEP_RECENT_TOKENS, Math.floor(ceiling(info.contextWindow) * 0.4))
+  if (total(ctx.estimate) >= ceiling(info.contextWindow) && cs.step !== step - 1) {
+    if (await compact(ctx, { flush: true, keepRecentTokens: keepBase })) {
+      cs.step = step
+      return { tag: "compacted" }
+    }
   }
 
   const lastStep = step >= ctx.agent.steps - 1
@@ -163,9 +193,16 @@ async function runStep(ctx: TurnContext, step: number, guard: DoomGuard, retryCo
       return { tag: "continue" }
     }
     const ev = streamError
-    if (/context|too long|maximum.*tokens/i.test(ev.error.message) && !persisted) {
-      const ok = await compact(ctx)
-      if (ok) return { tag: "compacted" }
+    if (isOverflow(ev.error.message) && !persisted) {
+      // Ước lượng sai (tokenizer khác, ảnh, …): nén lại, mỗi lần giữ ít nguyên văn hơn.
+      const factor = OVERFLOW_SHRINK[cs.overflow++]
+      if (factor === undefined) return { tag: "failed", error: new Error(`context still too long after ${OVERFLOW_SHRINK.length} compactions: ${ev.error.message}`) }
+      ctx.events.onNotice?.(ctx.sessionID, `provider says context is too long; compacting (keep ${Math.round(factor * 100)}% of recent)`)
+      if (await compact(ctx, { keepRecentTokens: Math.floor(keepBase * factor) })) {
+        cs.step = step
+        return { tag: "compacted" }
+      }
+      return { tag: "failed", error: new Error(`context too long and compaction could not shrink it: ${ev.error.message}`) }
     }
     return ev.retryable
       ? { tag: "retry", delay: ev.retryAfterMs ?? Math.min(8000, 1000 * 2 ** Math.min(3, retryCount)), reason: ev.error.message }
@@ -241,22 +278,121 @@ function launchTool(ctx: TurnContext, ev: Extract<StreamEvent, { type: "tool-cal
   return run()
 }
 
-async function compact(ctx: TurnContext): Promise<boolean> {
+/**
+ * Nén context. `keepRecentTokens` nhỏ dần khi overflow recovery. Thứ tự dự phòng cho bản tóm tắt:
+ * model compaction → model chính → checkpoint dựng tay (`fallbackSummary`). Trả false khi không có
+ * gì để nén, bị dừng, hoặc mọi model lỗi mạng (để loop retry như bình thường).
+ */
+async function compact(ctx: TurnContext, opts: { keepRecentTokens?: number; flush?: boolean } = {}): Promise<boolean> {
   ctx.events.onNotice?.(ctx.sessionID, "compacting context…")
+  if (opts.flush && ctx.memoryFlush !== false) await flushMemory(ctx)
+  if (ctx.signal.aborted) return false
+
   const pruned = prune(ctx.messages)
-  const boundary = keepBoundary(pruned)
+  const boundary = keepBoundary(pruned, opts.keepRecentTokens)
   const keepFrom = pruned[boundary]
   if (!keepFrom || boundary <= 1) return false
+  // Checkpoint chỉ được tiến lên; lùi lại hoặc đứng yên = không giải phóng được gì.
+  const previous = ctx.compactionSummary ? pruned.findIndex((m) => m.id === ctx.compactionSummary!.keepFromID) : -1
+  if (boundary <= previous) return false
+
+  const input = fromCheckpoint(pruned, ctx.compactionSummary)
+  const candidates = [ctx.summarizer, { provider: ctx.provider, model: ctx.model }].filter(
+    (c, i, all): c is NonNullable<typeof c> => !!c && all.findIndex((x) => x?.provider === c.provider && x?.model === c.model) === i,
+  )
+  let summary: string | undefined
+  let formatFailed = false
+  for (const c of candidates) {
+    try {
+      summary = await summarizeFitted(ctx, c, input)
+      break
+    } catch (e) {
+      if (ctx.signal.aborted) return false
+      if (e instanceof SummaryFormatError) formatFailed = true
+      ctx.events.onNotice?.(ctx.sessionID, `compaction (${c.model}) failed: ${(e as Error).message}`)
+    }
+  }
+  if (summary === undefined) {
+    if (!formatFailed) return false
+    summary = fallbackSummary(ctx.messages.slice(0, ctx.messages.findIndex((m) => m.id === keepFrom.id)), ctx.compactionSummary?.summary)
+  }
+
+  const skills = skillsBefore(ctx.messages, keepFrom.id)
+  if (skills.length) summary += `\n\nSkills loaded earlier (their text is no longer in context; call \`skill\` again if needed): ${skills.map((s) => `[SKILL_PRUNED: ${s}]`).join(" ")}`
+
+  const compaction = { id: id("cmp"), summary, keepFromID: keepFrom.id, createdAt: Date.now() }
+  await ctx.store.addCompaction(ctx.sessionID, compaction)
+  ctx.compactionSummary = compaction
+  // Re-anchor: số đo của provider không còn đúng sau khi đổi transcript → ước lượng lại từ đầu (gồm system).
+  const systemTokens = ctx.system.reduce((n, s) => n + estimateText(s), 0)
+  ctx.estimate = { measured: 0, estimated: systemTokens + fromCheckpoint(ctx.messages, compaction).reduce((n, m) => n + estimateMessage(m), 0) }
+  return true
+}
+
+/** Request summarize phải vừa context của model tóm tắt; tự nó báo tràn → thu nhỏ input tiếp. */
+async function summarizeFitted(ctx: TurnContext, c: { provider: ProviderClient; model: string }, input: Message[]) {
+  const info = c.provider.info(c.model)
+  const systemTokens = ctx.system.reduce((n, s) => n + estimateText(s), 0)
+  const room = ceiling(info.contextWindow) - systemTokens - SUMMARY_MAX_OUTPUT
+  for (const f of [1, ...OVERFLOW_SHRINK.slice(1)]) {
+    try {
+      return await summarize(c.provider, c.model, ctx.system, fitForSummary(input, Math.max(2_000, Math.floor(room * f))), ctx.signal)
+    } catch (e) {
+      if (!isOverflow((e as Error).message) || f === OVERFLOW_SHRINK.at(-1)) throw e
+    }
+  }
+  throw new Error("unreachable")
+}
+
+function skillsBefore(messages: Message[], keepFromID: string) {
+  const idx = messages.findIndex((m) => m.id === keepFromID)
+  const ids = (ms: Message[]) =>
+    new Set(ms.flatMap((m) => m.parts.flatMap((p) => (p.type === "tool-call" && p.name === "skill" && typeof (p.args as { id?: unknown })?.id === "string" ? [(p.args as { id: string }).id] : []))))
+  const kept = ids(messages.slice(idx))
+  return [...ids(messages.slice(0, idx))].filter((s) => !kept.has(s))
+}
+
+const FLUSH_STEPS = 3
+
+/**
+ * Pha 0: trước khi nén, cho agent có tool `memory` cơ hội ghi lại điều cần nhớ lâu dài.
+ * Chạy "ngoài transcript": prompt và reply không được lưu (chỉ tác dụng của tool memory còn lại),
+ * nên không làm bẩn phần recent-context. Gửi đủ tool definitions để giữ cache prefix,
+ * nhưng chỉ thực thi `memory`.
+ */
+async function flushMemory(ctx: TurnContext) {
+  const memory = ctx.tools.find((t) => t.name === "memory")
+  if (!memory) return
+  const convo: Message[] = [...fromCheckpoint(ctx.messages, ctx.compactionSummary)]
+  convo.push({ id: id("msg"), role: "user", source: "system", createdAt: Date.now(), parts: [{ type: "text", text: MEMORY_FLUSH_PROMPT }] })
   try {
-    const summary = await summarize(ctx.provider, ctx.model, ctx.system, fromCheckpoint(pruned, ctx.compactionSummary), ctx.signal)
-    const compaction = { id: id("cmp"), summary, keepFromID: keepFrom.id, createdAt: Date.now() }
-    await ctx.store.addCompaction(ctx.sessionID, compaction)
-    ctx.compactionSummary = compaction
-    ctx.estimate = { measured: 0, estimated: fromCheckpoint(ctx.messages, compaction).reduce((n, m) => n + estimateMessage(m), 0) }
-    return true
+    for (let i = 0; i < FLUSH_STEPS && !ctx.signal.aborted; i++) {
+      const reply: Message = { id: id("msg"), role: "assistant", parts: [], createdAt: Date.now() }
+      let text = ""
+      const calls: Array<Extract<StreamEvent, { type: "tool-call" }>> = []
+      const tools = ctx.tools.map((t) => t.definition())
+      for await (const ev of ctx.provider.stream({ model: ctx.model, system: ctx.system, messages: convo, tools, toolChoice: "auto", maxOutputTokens: 2_000 }, ctx.signal)) {
+        if (ev.type === "text-delta") text += ev.text
+        else if (ev.type === "tool-call") calls.push(ev)
+        else if (ev.type === "error") throw ev.error
+      }
+      if (calls.length === 0 || text.trim() === NO_REPLY) return
+      if (text) reply.parts.push({ type: "text", text })
+      for (const c of calls) reply.parts.push({ type: "tool-call", callID: c.callID, name: c.name, args: c.args })
+      for (const c of calls) {
+        if (c.name !== "memory") {
+          reply.parts.push({ type: "tool-result", callID: c.callID, name: c.name, output: "Only `memory` is available right now.", isError: true })
+          continue
+        }
+        ctx.events.onToolStart?.(ctx.sessionID, c.name, c.args, c.callID)
+        const r = await executeTool(memory, c.args, { ...ctx.toolContext, signal: ctx.signal }, { callID: c.callID })
+        ctx.events.onToolEnd?.(ctx.sessionID, c.name, r.output, r.isError ?? false, c.callID)
+        reply.parts.push({ type: "tool-result", callID: c.callID, name: c.name, output: r.output, isError: r.isError ?? false })
+      }
+      convo.push(reply)
+    }
   } catch (e) {
-    ctx.events.onNotice?.(ctx.sessionID, `compaction failed: ${(e as Error).message}`)
-    return false
+    if (!ctx.signal.aborted) ctx.events.onNotice?.(ctx.sessionID, `memory flush skipped: ${(e as Error).message}`)
   }
 }
 

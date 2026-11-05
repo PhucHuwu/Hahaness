@@ -22,6 +22,7 @@ import type { ToolRegistry } from "./tool/registry.ts"
 import { makeAsk } from "./tool/execute.ts"
 import type { Tool } from "./tool/define.ts"
 import type { SkillStore } from "./context/skills.ts"
+import type { CompactionConfig } from "./config.ts"
 
 export interface HarnessConfig {
   cwd: string
@@ -38,6 +39,7 @@ export interface HarnessConfig {
   permissions?: Ruleset
   maxConcurrentSubagents?: number
   maxDepth?: number
+  compaction?: CompactionConfig
 }
 
 interface Live {
@@ -182,6 +184,8 @@ export class Harness {
       messages: live.messages,
       compactionSummary: live.compaction,
       estimate: live.estimate,
+      summarizer: this.summarizer(live.session.id),
+      memoryFlush: this.cfg.compaction?.memoryFlush,
       saveOutput: (callID, output) => this.cfg.docs.put(`tool-output/${callID}.txt`, output, live.agent.id),
       events: this.cfg.events,
       signal: live.abort.signal,
@@ -213,9 +217,23 @@ export class Harness {
   }
 
   /** Đổi provider/model sau khi CEO sửa cấu hình; phiên đang sống giữ model cũ cho đến khi tạo phiên mới. */
-  reconfigure(opts: { providers?: ProviderRegistry; defaultModel?: string }) {
+  reconfigure(opts: { providers?: ProviderRegistry; defaultModel?: string; compaction?: CompactionConfig }) {
     if (opts.providers) this.cfg.providers = opts.providers
     if (opts.defaultModel) this.cfg.defaultModel = opts.defaultModel
+    if ("compaction" in opts) this.cfg.compaction = opts.compaction
+  }
+
+  /** `compaction.model` cấu hình sai không được làm hỏng lượt chat: báo và dùng model của phiên. */
+  private summarizer(sessionID: string) {
+    const ref = this.cfg.compaction?.model
+    if (!ref) return undefined
+    try {
+      const r = this.cfg.providers.resolve(ref)
+      return { provider: r.client, model: r.model }
+    } catch (e) {
+      this.cfg.events.onNotice?.(sessionID, `compaction.model ignored: ${(e as Error).message}`)
+      return undefined
+    }
   }
 
   /**
