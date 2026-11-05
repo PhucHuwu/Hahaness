@@ -27,9 +27,33 @@ export function evaluate(rules: Ruleset, action: string, resource: string): Effe
   return "ask"
 }
 
-/** Có rule deny nào match không, bất kể thứ tự. Saved approval không được vượt qua cái này. */
+/**
+ * Có rule deny nào match không. Deny chỉ bị gỡ bởi một rule allow ĐỨNG SAU, cùng action
+ * và hẹp hơn hẳn (`write * deny` rồi `write drafts/* allow`) — đó là ngoại lệ có chủ ý.
+ * Allow rộng hơn hoặc đứng trước không gỡ được. Saved approval không vượt qua cái này.
+ */
 export function denied(rules: Ruleset, action: string, resource: string): boolean {
-  return rules.some((r) => r.effect === "deny" && matches(r, action, resource))
+  return rules.some(
+    (r, i) =>
+      r.effect === "deny" &&
+      matches(r, action, resource) &&
+      !rules.slice(i + 1).some((a) => a.effect === "allow" && a.action === r.action && narrower(a.resource, r.resource) && matches(a, action, resource)),
+  )
+}
+
+/** `inner` là pattern hẹp hơn hẳn `outer` dạng `prefix*`. */
+function narrower(inner: string, outer: string): boolean {
+  if (inner === outer || !outer.endsWith("*") || outer.slice(0, -1).includes("*")) return false
+  return inner.startsWith(outer.slice(0, -1))
+}
+
+/**
+ * Deny toàn phần (`action * deny`) đặt lên đầu, để các allow hẹp hơn cùng action trong
+ * cùng file làm ngoại lệ. Sửa dữ liệu cũ kiểu `drafts/* allow` rồi `* deny` (allow chết).
+ */
+export function hoistBroadDenies(rules: Ruleset): Ruleset {
+  const broad = (r: Rule) => r.effect === "deny" && r.resource === "*" && r.action !== "*"
+  return [...rules.filter(broad), ...rules.filter((r) => !broad(r))]
 }
 
 /** Tool bị `deny *` cho action của nó → loại khỏi definitions gửi model. */

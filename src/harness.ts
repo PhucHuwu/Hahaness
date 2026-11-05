@@ -19,7 +19,7 @@ import { changed, environment, removed, updateNotice, type InstructionSource } f
 import * as workspace from "./context/workspace.ts"
 import { estimateMessage } from "./context/budget.ts"
 import { AskGate, type AskHandler } from "./permission/ask.ts"
-import { inherit, type Ruleset } from "./permission/ruleset.ts"
+import { denied, evaluate, inherit, type Ruleset } from "./permission/ruleset.ts"
 import type { ProviderRegistry } from "./provider/registry.ts"
 import type { ProviderClient } from "./provider/types.ts"
 import type { ToolRegistry } from "./tool/registry.ts"
@@ -368,7 +368,7 @@ export class Harness {
       source: "agent",
       from: opts.from ?? parent.agent.id,
       createdAt: Date.now(),
-      parts: [{ type: "text", text: `You are a subagent spawned by another session.\n${forked}\n${renderBrief(opts.brief)}` }],
+      parts: [{ type: "text", text: `You are a subagent spawned by another session.${saveHint(child.ruleset)}\n${forked}\n${renderBrief(opts.brief)}` }],
     })
 
     // Foreground: parent đang chờ trong tool call → dừng parent (hoặc tool timeout) thì dừng luôn child.
@@ -424,8 +424,23 @@ export class Harness {
     const asked = outcome.tag === "completed" ? pendingQuestion(child.messages) : undefined
     const last = [...child.messages].reverse().find((m) => m.role === "assistant" && m.parts.some((p) => p.type === "text"))
     const summary = last?.parts.filter((p) => p.type === "text").map((p) => p.text).join("") ?? ""
+    // Chỉ tính write thành công; write lỗi báo riêng để người giao việc không chuyển lời khẳng định sai.
     const files = new Set<string>()
-    for (const m of child.messages) for (const p of m.parts) if (p.type === "tool-call" && p.name === "write") files.add((p.args as any)?.path)
+    const failed = new Map<string, string>()
+    const writes = new Map<string, string>()
+    for (const m of child.messages)
+      for (const p of m.parts) {
+        if (p.type === "tool-call" && p.name === "write") writes.set(p.callID, String((p.args as any)?.path ?? ""))
+        if (p.type === "tool-result" && writes.has(p.callID)) {
+          const path = writes.get(p.callID)!
+          if (p.isError) failed.set(path, String(p.output).split("\n")[0]!.slice(0, 160))
+          else {
+            files.add(path)
+            failed.delete(path)
+          }
+        }
+      }
+    for (const f of files) failed.delete(f)
     const steps = child.messages.filter((m) => m.role === "assistant").length
     return {
       sessionID: child.session.id,
@@ -434,6 +449,7 @@ export class Harness {
       exitReason: asked ? "needs_input" : outcome.tag === "failed" ? `error: ${outcome.error.message}` : outcome.tag,
       summary: (asked ?? summary).slice(0, 8000),
       filesTouched: [...files].filter(Boolean),
+      failedWrites: [...failed].map(([path, error]) => ({ path, error })),
       usage: { steps, inputTokens: child.estimate.measured, outputTokens: child.messages.reduce((n, m) => (m.role === "assistant" ? n + estimateMessage(m) : n), 0) },
     }
   }
@@ -455,6 +471,14 @@ function employeeRules(agent: AgentDef, session: Session): Ruleset {
   }).map(deny)
 }
 
+/** Cho nhân viên biết chỗ được lưu, để không thử `deliverables/` rồi bị từ chối. */
+function saveHint(rules: Ruleset): string {
+  const can = (p: string) => !denied(rules, "write", p) && evaluate(rules, "write", p) === "allow"
+  if (can("deliverables/x.md")) return ""
+  if (can("drafts/x.md")) return "\nSave documents only under drafts/ (e.g. drafts/plan.md) and give the path in your report; your lead publishes the final version."
+  return "\nYou cannot save documents; put the full result in your final message."
+}
+
 export interface Brief {
   goal: string
   context: string
@@ -470,6 +494,8 @@ export interface ResultEntry {
   exitReason: string
   summary: string
   filesTouched: string[]
+  /** `write` bị lỗi và không có lần ghi thành công sau đó → tài liệu KHÔNG tồn tại dù summary nói gì. */
+  failedWrites?: Array<{ path: string; error: string }>
   usage: { steps: number; inputTokens: number; outputTokens: number }
 }
 
@@ -478,7 +504,10 @@ export function renderBrief(b: Brief) {
 }
 
 export function renderResult(r: ResultEntry) {
-  const files = r.filesTouched.length ? `\nfiles: ${r.filesTouched.join(", ")}` : ""
+  const failed = r.failedWrites?.length
+    ? `\nWRITE FAILED (these documents were NOT saved, whatever the summary says): ${r.failedWrites.map((f) => `${f.path} — ${f.error}`).join("; ")}`
+    : ""
+  const files = (r.filesTouched.length ? `\nfiles saved: ${r.filesTouched.join(", ")}` : "") + failed
   const ask =
     r.status === "needs_input"
       ? `\n\n${r.agent} is waiting for your answer. Reply with delegate(action: "steer", sessionID: "${r.sessionID}", message: …); if only the CEO can decide, ask them first. Their next report arrives as a message.`

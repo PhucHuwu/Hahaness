@@ -1115,3 +1115,55 @@ test("anthropic: request mapping (system cache, tool_use/tool_result pairing) an
   }
   assert.equal(ConfigSchema.parse({ providers: { a: { type: "anthropic", apiKey: "sk-ant-x" } } }).providers.a!.type, "anthropic")
 })
+
+test("permission: narrower allow after a broad deny is an exception; legacy order is repaired", () => {
+  const rules = [
+    { action: "write", resource: "*", effect: "deny" as const },
+    { action: "write", resource: "drafts/*", effect: "allow" as const },
+  ]
+  assert.ok(!denied(rules, "write", "drafts/x.md"))
+  assert.ok(denied(rules, "write", "deliverables/x.md"))
+  // allow đứng trước deny rộng, hoặc allow rộng bằng deny: không gỡ được
+  assert.ok(denied([...rules].reverse(), "write", "drafts/x.md"))
+  assert.ok(denied([{ action: "write", resource: "drafts/*", effect: "deny" as const }, { action: "write", resource: "*", effect: "allow" as const }], "write", "drafts/x.md"))
+  // staff cũ lưu sai thứ tự (drafts allow rồi * deny) → fromMarkdown đưa deny rộng lên đầu
+  const legacy = fromMarkdown(
+    '---\nid: m\nmode: subagent\npermissions:\n  - { action: write, resource: "drafts/*", effect: allow }\n  - { action: write, resource: "*", effect: deny }\n---\nbody',
+    "m",
+  )
+  assert.equal(evaluate(legacy.permissions, "write", "drafts/a.md"), "allow")
+  assert.ok(!denied(legacy.permissions, "write", "drafts/a.md"))
+  assert.ok(denied(legacy.permissions, "write", "deliverables/a.md"))
+})
+
+test("hired writer saves under drafts/, deliverables/ is refused and reported as WRITE FAILED", async () => {
+  const provider = scripted([
+    () => [{ type: "tool-call", callID: "c1", name: "hire", args: { id: "mk", name: "Mk", description: "marketing", system: "You market.", capabilities: ["read", "write"] } }, finish("tool-calls")],
+    () => [{ type: "tool-call", callID: "c2", name: "delegate", args: { action: "spawn", agent: "mk", brief: { goal: "plan", context: "c", done_when: "d" } } }, finish("tool-calls")],
+    (req) => {
+      const brief = req.messages[0]!.parts[0]!
+      assert.match(brief.type === "text" ? brief.text : "", /only under drafts\//)
+      return [
+        { type: "tool-call", callID: "w1", name: "write", args: { path: "deliverables/plan.md", content: "x" } },
+        { type: "tool-call", callID: "w2", name: "write", args: { path: "drafts/plan.md", content: "the plan" } },
+        finish("tool-calls"),
+      ]
+    },
+    () => [{ type: "text-delta", text: "Saved to deliverables/plan.md" }, finish()],
+    (req) => {
+      const r = req.messages.at(-1)!.parts.find((p) => p.type === "tool-result")!
+      assert.match(r.output, /files saved: drafts\/plan\.md/)
+      assert.match(r.output, /WRITE FAILED[^\n]*deliverables\/plan\.md/)
+      return [{ type: "text-delta", text: "ok" }, finish()]
+    },
+  ])
+  const { harness, docs, cleanup } = await setup(provider)
+  try {
+    const main = await harness.createSession({ agent: "cto" })
+    assert.equal((await harness.send(main.session.id, "make a plan")).tag, "completed")
+    assert.equal(docs.get("drafts/plan.md")?.content, "the plan")
+    assert.equal(docs.get("deliverables/plan.md"), undefined)
+  } finally {
+    await cleanup()
+  }
+})

@@ -74,7 +74,7 @@ spawn ─▶ child session (parentID, agent, model, ruleset = inherit(parent, ch
 ### ResultEntry — thứ duy nhất qua biên
 
 ```ts
-{ sessionID, agent, status: "completed"|"failed"|"stopped"|"needs_input", exitReason, summary (≤8k), filesTouched, usage }
+{ sessionID, agent, status: "completed"|"failed"|"stopped"|"needs_input", exitReason, summary (≤8k), filesTouched, failedWrites?, usage }
 ```
 
 Render cho CTO:
@@ -82,9 +82,13 @@ Render cho CTO:
 ```xml
 <subagent sessionID="ses_x" agent="writer" status="completed" steps="6">
 …báo cáo cuối của nhân viên…
-files: drafts/welcome-email.md
+files saved: drafts/welcome-email.md
+WRITE FAILED (these documents were NOT saved, whatever the summary says): deliverables/x.md — Error: Permission rejected: denied by policy
 </subagent>
 ```
+
+- `filesTouched` lấy từ cặp tool-call/tool-result của `write`, và chỉ tính các lần ghi **thành công**. Path ghi lỗi, không được ghi lại thành công sau đó, nằm trong `failedWrites`. Lý do: model nhân viên vẫn có thể viết "đã lưu" dù mọi lần `write` bị từ chối, và CTO đã chuyển nguyên lời đó cho CEO.
+- Nơi lưu: nhân viên chỉ ghi được `drafts/*`. Brief mở đầu bằng một câu nhắc chỗ lưu (`saveHint`, tính từ ruleset của phiên con). CTO duyệt xong thì đưa bản cuối vào `deliverables/`. `cto.md` yêu cầu CTO chỉ nói một tài liệu tồn tại khi `write` hoặc `read` đã xác nhận.
 
 ### Nhân viên hỏi ngược: tool `ask_lead` → `status: "needs_input"`
 

@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { join, basename } from "node:path"
 import { DEFAULTS, type AgentDef } from "./types.ts"
-import { evaluate, type Rule } from "../permission/ruleset.ts"
+import { evaluate, hoistBroadDenies, type Rule } from "../permission/ruleset.ts"
 import type { Db } from "../core/db.ts"
 
 /** Frontmatter tối giản: key: value, list `- a` hoặc `[a, b]`, rule `- { action: x, resource: y, effect: z }`. */
@@ -61,7 +61,7 @@ export function fromMarkdown(text: string, fallbackID: string): AgentDef {
     steps: typeof meta.steps === "number" ? meta.steps : DEFAULTS.steps,
     context: (meta.context as AgentDef["context"]) ?? DEFAULTS.context,
     role: (meta.role as AgentDef["role"]) ?? DEFAULTS.role,
-    permissions: Array.isArray(meta.permissions) ? (meta.permissions as Rule[]) : [],
+    permissions: Array.isArray(meta.permissions) ? hoistBroadDenies(meta.permissions as Rule[]) : [],
     system: body,
   }
 }
@@ -106,8 +106,9 @@ export function capabilityRules(capabilities: readonly Capability[]): Rule[] {
   const caps = new Set(capabilities)
   return [
     { action: "read", resource: "*", effect: caps.has("read") ? "allow" : "deny" },
-    { action: "write", resource: "drafts/*", effect: caps.has("write") ? "allow" : "deny" },
+    // Deny rộng trước, ngoại lệ hẹp sau (last-match-wins + `denied` tôn trọng ngoại lệ đứng sau).
     { action: "write", resource: "*", effect: "deny" },
+    ...(caps.has("write") ? [{ action: "write", resource: "drafts/*", effect: "allow" as const }] : []),
     { action: "webfetch", resource: "*", effect: caps.has("webfetch") ? "allow" : "deny" },
     { action: "websearch", resource: "*", effect: caps.has("websearch") ? "allow" : "deny" },
     ...MANAGEMENT_ACTIONS.filter((a) => a !== "question").map((action) => ({ action, resource: "*", effect: "deny" as const })),

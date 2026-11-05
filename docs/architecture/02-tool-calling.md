@@ -53,7 +53,9 @@ type Rule = { action: string; resource: string; effect: "allow" | "ask" | "deny"
 
 - Thứ tự merge: `config.permissions` → `agent.permissions` → `session.permissions` (saved "always" của user). Saved rule **không override** rule `deny` có sẵn: check `denied()` trước.
 - Actions chuẩn: `read`, `write`, `webfetch`, `websearch`, `mcp:<server>:<tool>` và nhóm quản trị `MANAGEMENT_ACTIONS` = `delegate`, `hire`, `memory`, `question`, `knowledge`, `manage_skill`, `staff`, `mcp_manage` (chỉ CTO).
-- `write` có resource = path → rule `{ write, "drafts/*", allow }` + `{ write, "*", deny }` giới hạn nhân viên.
+- `write` có resource = path → nhân viên có `{ write, "*", deny }` **rồi** `{ write, "drafts/*", allow }`: deny rộng trước, ngoại lệ hẹp sau.
+- `denied()` (chặn cứng, saved approval không vượt): một rule deny match thì bị chặn, **trừ khi** có một rule allow đứng sau nó, cùng action, resource hẹp hơn hẳn (`drafts/*` so với `*`) và cũng match. Allow đứng trước deny, hay allow rộng bằng hoặc rộng hơn deny (vd. `shell * allow` sau `shell git push* deny`), không gỡ được deny. Deny kế thừa từ phiên cha (`inherit`) nối vào cuối ruleset của con nên con không có ngoại lệ nào đứng sau nó.
+- Bug đã gặp: `capabilityRules` cũ sinh `drafts/* allow` rồi `* deny`, nên nhân viên được tuyển không ghi được gì cả, mà vẫn báo "đã lưu". `fromMarkdown` giờ đưa các deny `action *` lên đầu (`hoistBroadDenies`), nên các dòng `staff` cũ trong DB tự được sửa khi load.
 - Chế độ unattended (cron/background subagent không có người trả lời): `ask` → `deny`.
 - Tắt tool cho agent = rule `{ action: "<tool>", resource: "*", effect: "deny" }`; registry `snapshot(ruleset)` lọc tool bị `deny *` khỏi definitions luôn (tiết kiệm token).
 
