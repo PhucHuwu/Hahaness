@@ -135,7 +135,7 @@ Trước đây steer đánh `source: user`, nên không phân biệt được v�
 - Mặc định gõ tự nhiên với CTO.
 - `@writer <task>` trong phiên CTO → brief tối thiểu, spawn nền (`wakeParent: false`).
 - Chat riêng: `POST /api/sessions { agent: "<id nhân viên>" }` tạo phiên gốc với nhân viên; nhân viên trả lời thẳng CEO, không giao việc/tuyển người.
-- `/staff` xem nhân viên + assignment đang chạy.
+- Nhân viên và việc đang chạy hiện ở sidebar Chat và thanh "Nhân viên" trên web.
 
 ## Giới hạn
 
