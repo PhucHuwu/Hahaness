@@ -3,6 +3,7 @@ import { buildProviders, ConfigSchema, saveConfig, storedConfig } from "../confi
 import * as workspace from "../context/workspace.ts"
 import { normalizePath, type DocMeta } from "../context/documents.ts"
 import { SkillStore } from "../context/skills.ts"
+import { knowledgeTree, normalizeNodeID, subtreeDocs } from "../context/knowledge.ts"
 import { toMarkdown } from "../agent/registry.ts"
 import type { McpServerConfig } from "../mcp/client.ts"
 import { HttpError, type Router } from "./http.ts"
@@ -81,8 +82,22 @@ export function adminRoutes(r: Router, app: App) {
       const d = docs.get(p)
       return { path: p, size: d?.size ?? 0, updatedAt: d?.updatedAt ?? 0, author: d?.author ?? null }
     }),
-    files: workspace.knowledge(docs).map(view),
+    tree: knowledgeTree(docs),
   }))
+
+  /** Xóa cả một node cùng cây con (từ cây trong UI). */
+  r.delete("/api/knowledge/node", (req) => {
+    let id: string
+    try {
+      id = normalizeNodeID(param(req, "path"))
+    } catch (e) {
+      throw new HttpError(400, (e as Error).message)
+    }
+    const paths = subtreeDocs(docs, id)
+    if (paths.length === 0) throw new HttpError(404, `no knowledge node ${id}`)
+    for (const p of paths) docs.delete(p)
+    return { ok: true, deleted: paths.length }
+  })
 
   r.get("/api/knowledge/file", (req) => {
     const p = editable(param(req, "path"))

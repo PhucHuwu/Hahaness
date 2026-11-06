@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { define } from "../define.ts"
 import { normalizePath, normalizePrefix, type DocumentStore } from "../../context/documents.ts"
+import { readNode } from "../../context/knowledge.ts"
 
 /**
  * Tài liệu của công ty nằm trong DB nhưng agent vẫn thấy chúng như path
@@ -10,7 +11,8 @@ import { normalizePath, normalizePrefix, type DocumentStore } from "../../contex
 export function documentTools(docs: DocumentStore) {
   const read = define({
     name: "read",
-    description: "Read a company document, e.g. COMPANY.md, knowledge/pricing.md, drafts/post.md. Use offset/limit for long documents.",
+    description:
+      "Read a company document, e.g. COMPANY.md, drafts/post.md. For the knowledge library, pass a node path (e.g. knowledge/brand or knowledge/brand/voice): you get that node's content and its sub-nodes; `knowledge` alone lists all sets. Use offset/limit for long documents.",
     input: z.object({
       path: z.string(),
       offset: z.number().int().min(1).optional().describe("First line to read, 1-based"),
@@ -18,8 +20,11 @@ export function documentTools(docs: DocumentStore) {
     }),
     permission: { action: "read", resource: (i) => safe(i.path) },
     async execute({ path, offset = 1, limit = 2000 }) {
-      const doc = docs.get(path)
+      const node = readNode(docs, path)
+      if (node && offset === 1 && limit === 2000) return node
+      const doc = docs.get(path) ?? (node ? docs.get(`${path.replace(/\.md$/i, "")}.md`) : undefined)
       if (!doc) {
+        if (node) return node
         const near = docs.children(path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "").map((c) => c.name)
         return { output: `No document "${path}".${near.length ? ` Nearby: ${near.slice(0, 20).join(", ")}` : ""}`, isError: true }
       }

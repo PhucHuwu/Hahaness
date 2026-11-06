@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { api, type KnowledgeView, type Staff } from "../api.ts"
+import { api, type KnowledgeNode, type KnowledgeView, type Staff } from "../api.ts"
 import { Editor } from "../components/Editor.tsx"
 
 const CORE: Record<string, string> = {
@@ -36,11 +36,15 @@ export function Knowledge() {
   }
   useEffect(() => void load(), [])
 
-  const newKnowledge = () => {
-    const name = prompt("Tên file (ví dụ: brand-voice.md)")?.trim()
+  /** Tạo node mới: dưới `parent` (id node) hoặc một bộ mới khi không có parent. */
+  const newNode = (parent?: string) => {
+    const name = prompt(parent ? `Tên phần mới trong ${parent.replace(/^knowledge\//, "")} (ví dụ: giong-van)` : "Tên bộ tri thức mới (ví dụ: thuong-hieu)")
+      ?.trim()
+      .replace(/\.md$/i, "")
+      .replace(/^knowledge\//, "")
+      .replace(/\s+/g, "-")
     if (!name) return
-    const path = `knowledge/${name.replace(/^knowledge\//, "")}`
-    setSel({ kind: "knowledge", path })
+    setSel({ kind: "knowledge", path: `${parent ?? "knowledge"}/${name}.md` })
   }
   const newStaff = () => setSel({ kind: "staff", id: "" })
 
@@ -68,19 +72,14 @@ export function Knowledge() {
           </section>
           <section>
             <div className="row between">
-              <h3>Tài liệu tham khảo</h3>
-              <button className="btn small" onClick={newKnowledge}>
-                Thêm
+              <h3>Bộ tri thức</h3>
+              <button className="btn small" onClick={() => newNode()}>
+                Thêm bộ
               </button>
             </div>
             <div className="list">
-              {view?.files.length === 0 && <div className="empty small">Chưa có. Gửi tài liệu cho CTO trong Chat, hoặc bấm Thêm.</div>}
-              {view?.files.map((f) => (
-                <button key={f.path} className={active({ kind: "knowledge", path: f.path }) ? "active" : undefined} onClick={() => setSel({ kind: "knowledge", path: f.path })}>
-                  <div className="title mono">{f.path.replace(/^knowledge\//, "")}</div>
-                  <div className="sub">{f.title || updated(f)}</div>
-                </button>
-              ))}
+              {view?.tree.length === 0 && <div className="empty small">Chưa có. Gửi tài liệu cho CTO trong Chat, hoặc bấm Thêm bộ.</div>}
+              {view?.tree.map((n) => <TreeNode key={n.id} node={n} depth={0} selected={sel.kind === "knowledge" ? sel.path : undefined} onSelect={(path) => setSel({ kind: "knowledge", path })} onAdd={newNode} />)}
             </div>
           </section>
           <section>
@@ -104,7 +103,17 @@ export function Knowledge() {
         </div>
         <div className="card" style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {sel.kind === "core" && <FileEditor key={sel.path} path={sel.path} hint={CORE[sel.path]} onSaved={load} />}
-          {sel.kind === "knowledge" && <FileEditor key={sel.path} path={sel.path} deletable onSaved={load} onDeleted={() => (setSel({ kind: "core", path: "COMPANY.md" }), load())} />}
+          {sel.kind === "knowledge" && (
+            <FileEditor
+              key={sel.path}
+              path={sel.path}
+              hint={NODE_HINT}
+              subtree={view && countBelow(findNode(view.tree, sel.path.replace(/\.md$/i, "")))}
+              deletable
+              onSaved={load}
+              onDeleted={() => (setSel({ kind: "core", path: "COMPANY.md" }), load())}
+            />
+          )}
           {sel.kind === "staff" && <StaffEditor key={sel.id} id={sel.id} staff={staff} onChanged={(id) => (load(), id && setSel({ kind: "staff", id }))} />}
         </div>
       </div>
@@ -112,7 +121,48 @@ export function Knowledge() {
   )
 }
 
-function FileEditor({ path, hint, deletable, onSaved, onDeleted }: { path: string; hint?: string; deletable?: boolean; onSaved: () => void; onDeleted?: () => void }) {
+const NODE_HINT =
+  "Dòng đầu \"# Tiêu đề\" và dòng tóm tắt \"> …\" ngay sau nó hiện trong mục lục mà mọi nhân viên thấy; họ dựa vào đó để chọn đúng phần cần đọc. Thay đổi áp dụng từ cuộc trò chuyện mới."
+
+function findNode(nodes: KnowledgeNode[], id: string): KnowledgeNode | undefined {
+  for (const n of nodes) {
+    if (n.id === id) return n
+    if (id.startsWith(n.id + "/")) return findNode(n.children, id)
+  }
+  return undefined
+}
+
+function countBelow(n?: KnowledgeNode): number {
+  return n ? n.children.reduce((s, c) => s + 1 + countBelow(c), 0) : 0
+}
+
+function TreeNode({ node, depth, selected, onSelect, onAdd }: { node: KnowledgeNode; depth: number; selected?: string; onSelect: (path: string) => void; onAdd: (parent: string) => void }) {
+  const [open, setOpen] = useState(depth === 0 ? false : true)
+  const path = node.doc ?? `${node.id}.md`
+  const hasChildren = node.children.length > 0
+  return (
+    <>
+      <div className="row tree-row" style={{ paddingLeft: depth * 14 }}>
+        <button className="tree-toggle" onClick={() => setOpen(!open)} disabled={!hasChildren} aria-label={open ? "Thu gọn" : "Mở rộng"}>
+          {hasChildren ? (open ? "▾" : "▸") : "·"}
+        </button>
+        <button className={`grow${selected === path ? " active" : ""}`} onClick={() => onSelect(path)}>
+          <div className="title">
+            {node.title}
+            {!node.doc && <span className="muted small"> (nhóm)</span>}
+          </div>
+          <div className="sub">{node.summary || (hasChildren ? `${countBelow(node)} phần` : updated({ size: node.size, updatedAt: node.updatedAt, author: node.author ?? null }))}</div>
+        </button>
+        <button className="tree-add" title="Thêm phần con" onClick={() => onAdd(node.id)}>
+          +
+        </button>
+      </div>
+      {open && node.children.map((c) => <TreeNode key={c.id} node={c} depth={depth + 1} selected={selected} onSelect={onSelect} onAdd={onAdd} />)}
+    </>
+  )
+}
+
+function FileEditor({ path, hint, subtree = 0, deletable, onSaved, onDeleted }: { path: string; hint?: string; subtree?: number; deletable?: boolean; onSaved: () => void; onDeleted?: () => void }) {
   const [content, setContent] = useState<string>()
   const [error, setError] = useState<string>()
   useEffect(() => {
@@ -126,15 +176,19 @@ function FileEditor({ path, hint, deletable, onSaved, onDeleted }: { path: strin
     onSaved()
   }
   const remove = async () => {
-    if (!confirm(`Xóa ${path}?`)) return
-    await api.delete(`/api/knowledge/file?path=${encodeURIComponent(path)}`)
+    if (subtree > 0) {
+      if (!confirm(`Xóa ${path.replace(/\.md$/, "")} cùng ${subtree} phần con bên trong?`)) return
+      await api.delete(`/api/knowledge/node?path=${encodeURIComponent(path)}`)
+    } else {
+      if (!confirm(`Xóa ${path}?`)) return
+      await api.delete(`/api/knowledge/file?path=${encodeURIComponent(path)}`)
+    }
     onDeleted?.()
   }
   if (error) return <div className="notice err">{error}</div>
   if (content === undefined) return <div className="empty">Đang tải…</div>
-  return (
-    <Editor title={path} hint={hint ?? "Nhân viên đọc tài liệu này khi cần; tên và dòng tiêu đề đầu tiên được liệt kê cho mọi nhân viên. Thay đổi áp dụng từ cuộc trò chuyện mới."} initial={content} onSave={save} onDelete={deletable ? remove : undefined} />
-  )
+  const initial = content || (path.startsWith("knowledge/") ? `# \n\n> \n` : "")
+  return <Editor title={path.replace(/\.md$/, "")} hint={hint} initial={initial} onSave={save} onDelete={deletable ? remove : undefined} />
 }
 
 const CAPS = ["read", "write", "webfetch", "websearch"] as const

@@ -126,7 +126,7 @@ test("skills: index in Tier A only when skills exist; `skill` tool loads body; k
   const provider = scripted([
     (req) => {
       assert.match(req.system[0]!, /<available_skills>[\s\S]*<skill id="weekly-report">Use for weekly summaries<\/skill>/)
-      assert.match(req.system[1]!, /<knowledge>[\s\S]*knowledge\/brand.md — Brand voice/)
+      assert.match(req.system[1]!, /<knowledge>[\s\S]*knowledge\/brand — Brand voice: Friendly\./)
       return [{ type: "tool-call", callID: "c1", name: "skill", args: { id: "weekly-report" } }, finish("tool-calls")]
     },
     (req) => {
@@ -439,7 +439,7 @@ test("CTO tools: knowledge, manage_skill, staff change the company; next session
     () => [{ type: "text-delta", text: "done" }, finish()],
     (req) => {
       assert.match(req.system[0]!, /<skill id="weekly-report">Use for weekly summaries<\/skill>/)
-      assert.match(req.system[1]!, /knowledge\/pricing\.md — Bảng giá 2026/)
+      assert.match(req.system[1]!, /knowledge\/pricing — Bảng giá 2026: Gói A/)
       return [{ type: "text-delta", text: "ok" }, finish()]
     },
   ])
@@ -971,12 +971,12 @@ test("mid-session change: new skill and knowledge reach employees; the agent's o
     await harness.send(cto.session.id, "next")
     const ctoUpdate = updateText(provider.requests[before]!).join("\n")
     assert.match(ctoUpdate, /press-release/, "CTO told about the skill the CEO added")
-    assert.doesNotMatch(ctoUpdate, /pricing\.md/, "CTO wrote pricing.md itself; no echo")
+    assert.doesNotMatch(ctoUpdate, /knowledge\/pricing/, "CTO wrote pricing itself; no echo")
 
     const n = provider.requests.length
     await harness.send(writer.session.id, "write something")
     const writerUpdate = updateText(provider.requests[n]!).join("\n")
-    assert.match(writerUpdate, /knowledge\/pricing\.md/)
+    assert.match(writerUpdate, /knowledge\/pricing — Pricing: Tea 30k/)
     assert.match(writerUpdate, /press-release/)
   } finally {
     await cleanup()

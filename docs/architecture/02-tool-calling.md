@@ -83,7 +83,7 @@ Không có shell, không edit code. Tool tài liệu (`documentTools(docs)`) đ�
 | `delegate` | list/spawn/steer/stop nhân viên | `delegate` | CTO |
 | `hire` | tạo vai mới (bảng `staff`) | `hire` | CTO |
 | `staff` | show/edit/fire nhân viên (không đụng CTO) | `staff` (resource = id) | CTO |
-| `knowledge` | thư viện `knowledge/*`, COMPANY.md, USER.md | `knowledge` (resource = action) | CTO |
+| `knowledge` | các bộ tri thức dạng cây `knowledge/*` (outline/save/append/move/delete), COMPANY.md, USER.md | `knowledge` (resource = action) | CTO |
 | `manage_skill` | tạo/sửa/xóa kỹ năng | `manage_skill` | CTO |
 | `mcp_manage` | nối/bật/tắt/gỡ server MCP | `mcp_manage` (resource = action; `add` là `ask`) | CTO |
 | `schedule` | việc định kỳ: tạo/sửa/tạm dừng/chạy ngay/lịch sử (`09-schedules.md`) | `schedule` (resource = action) | CTO |

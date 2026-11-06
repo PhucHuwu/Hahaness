@@ -51,7 +51,7 @@ Bản đầu lưu workspace thành file (cột "Thay cho" ở trên). Bước nh
 
 | Tool | Action | Tác dụng |
 |---|---|---|
-| `knowledge` | list, save, append, delete, company, ceo | thư viện `knowledge/*`, COMPANY.md, USER.md |
+| `knowledge` | outline, save, append, move, delete, company, ceo | các bộ tri thức dạng cây `knowledge/*` (`10-knowledge-tree.md`), COMPANY.md, USER.md |
 | `manage_skill` | list, show, save, delete | kỹ năng (description = khi nào dùng; instructions = quy trình) |
 | `staff` | show, edit, fire | sửa job description/capabilities, cho nghỉ; không sửa/đuổi CTO |
 | `mcp_manage` | list, add, enable, disable, reconnect, remove | kết nối công cụ ngoài; **`add` là `ask`** trong ruleset CTO → CEO duyệt trên UI (stdio chạy lệnh trên máy) |

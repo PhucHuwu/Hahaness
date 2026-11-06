@@ -56,3 +56,4 @@ Server chỉ bind `127.0.0.1`, không có xác thực — dùng trên máy mình
 | [07-ui-server](docs/architecture/07-ui-server.md) | Giao diện web, API + SSE, knowledge/skills/results, MCP client, giới hạn |
 | [08-storage](docs/architecture/08-storage.md) | Một file SQLite, schema, tool quản trị của CTO |
 | [09-schedules](docs/architecture/09-schedules.md) | Việc định kỳ: cron, phiên CTO tự mở, chạy bù, tool bắt buộc |
+| [10-knowledge-tree](docs/architecture/10-knowledge-tree.md) | Kho tri thức: mỗi bộ là một cây, index theo nhánh, `read` theo node |

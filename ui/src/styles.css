@@ -89,6 +89,12 @@ p { margin: 0 0 8px; }
 .list button.active { background: var(--panel); border-color: var(--line-2); }
 .list .title { font-weight: 500; }
 .list .sub { color: var(--ink-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree-row { gap: 0; align-items: stretch; flex-wrap: nowrap; }
+.tree-row > .grow { min-width: 0; }
+.list .tree-row > .tree-toggle, .list .tree-row > .tree-add { width: 22px; flex: none; padding: 0; text-align: center; color: var(--ink-3); }
+.list .tree-row > .tree-toggle:disabled { cursor: default; background: none; border-color: transparent; }
+.list .tree-row > .tree-add { opacity: 0; }
+.tree-row:hover > .tree-add { opacity: 1; }
 
 button.btn, a.btn {
   border: 1px solid var(--line-2);

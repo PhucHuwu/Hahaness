@@ -35,12 +35,12 @@ ui/ (React + Vite, build tĩnh)  ──HTTP JSON + SSE──▶  src/server/ (no
 | Mục | Backend | Ai thấy |
 |---|---|---|
 | `COMPANY.md`, `USER.md`, `MEMORY.md` | `/api/knowledge/file` | theo `03` |
-| `knowledge/**` | cùng endpoint, chỉ nhận path trong `knowledge/` hoặc 3 tài liệu lõi (khác → 400) | **index** (path + dòng đầu) vào Tier B cho **mọi vai**; nội dung đọc qua `read`/`search` |
+| `knowledge/**` | cùng endpoint, chỉ nhận path trong `knowledge/` hoặc 3 tài liệu lõi (khác → 400); `GET /api/knowledge` trả `tree`, `DELETE /api/knowledge/node` xóa cả cây con | **index** cây (mỗi bộ + nhánh cấp 1) vào Tier B cho **mọi vai**; nội dung đọc theo node qua `read` (`10-knowledge-tree.md`) |
 | Nhân viên (bảng `staff`) | `/api/staff` (+ `/markdown`) | CEO sửa frontmatter + job description; không sửa/đuổi CTO. Cho nghỉ = `fired = 1` |
 
 Tài liệu CEO sửa từ UI ghi `author = "ceo"`; CTO sửa qua tool ghi id vai. UI hiện "ai sửa, lúc nào".
 
-Index knowledge cap 60 tài liệu; thêm → gợi ý `list knowledge`. Không đưa nội dung vào prompt — tài liệu tham khảo có thể lớn; model tự `read` khi brief/câu hỏi liên quan.
+Index knowledge cap 80 dòng; vượt thì chỉ còn cấp bộ, rồi gợi ý `read knowledge`. Không đưa nội dung vào prompt — tài liệu tham khảo có thể lớn; model tự `read` khi brief/câu hỏi liên quan.
 
 ## Kết quả (Results)
 

@@ -58,7 +58,7 @@ src/
   tool/        define, registry, execute pipeline, output truncation
     builtin/   read, list, search, write, webfetch, websearch, todo, memory, question, delegate, hire, skill,
                manage (knowledge, manage_skill, staff, mcp_manage), schedule
-  context/     system tiers, documents (DocumentStore), workspace (COMPANY/USER/MEMORY/knowledge), skills, budget, compaction
+  context/     system tiers, documents (DocumentStore), workspace (COMPANY/USER/MEMORY), knowledge (cây tri thức), skills, budget, compaction
   permission/  ruleset, ask gate
   agent/       registry (markdown ↔ AgentDef, hire/edit/update/fire, overlay từ DB), builtin/ (cto, researcher, writer, marketer, analyst)
   mcp/         client (JSON-RPC stdio/http), manager (bảng mcp_servers → ToolRegistry)

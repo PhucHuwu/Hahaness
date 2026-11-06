@@ -57,7 +57,7 @@ export interface ScheduleRun {
 export type ScheduleInput = Pick<Schedule, "title" | "agent" | "cron" | "task"> & { followUp?: string; tools?: string[]; enabled?: boolean }
 
 export const DEFAULT_FOLLOW_UP =
-  "Check the report against the brief. Keep what is new and worth knowing with `knowledge` (append to an existing document on the same topic instead of creating near-duplicates; skip what the library already says). Finish with a short summary for the CEO: what was learned, what was stored where, anything that needs their decision."
+  "Check the report against the brief. Keep what is new and worth knowing with `knowledge`: check the outline first, put each finding in the node of the set that covers its topic (append to it, or save a new sub-node under it) instead of creating near-duplicate sets; skip what the library already says. Finish with a short summary for the CEO: what was learned, what was stored where, anything that needs their decision."
 
 const TICK_MS = 30_000
 /** Trễ hơn mức này coi là chạy bù (máy tắt / ngủ lúc tới giờ). */

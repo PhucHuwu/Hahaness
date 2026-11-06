@@ -35,7 +35,7 @@ Tài liệu công ty là bản ghi trong bảng `documents` (path ảo, xem `08-
 | `COMPANY.md` | mọi vai | công ty làm gì, sản phẩm, khách hàng, giọng văn | 20k chars |
 | `USER.md` | CTO | CEO là ai, muốn báo cáo thế nào, ghét gì | 20k |
 | `MEMORY.md` | CTO | CTO tự ghi qua tool `memory`, mục ngăn bằng `§` | 4k, bỏ cũ nhất khi đầy |
-| `knowledge/**` | mọi vai | chỉ **index** `<knowledge>` (path + dòng đầu); nội dung đọc bằng `read`/`search` | 60 tài liệu trong index |
+| `knowledge/**` | mọi vai | các bộ tri thức dạng cây: **index** `<knowledge>` gồm mỗi bộ và nhánh cấp 1 (id, tiêu đề, tóm tắt); `read <node>` trả nội dung node và danh sách con (xem `10-knowledge-tree.md`) | 80 dòng trong index |
 | kỹ năng (bảng `skills`) | mọi vai | chỉ **index** `<available_skills>` ở Tier A; thân load bằng tool `skill` | — |
 
 - Nhân viên không thấy `USER.md`/`MEMORY.md`: họ không cần biết sếp, và giảm rò rỉ sở thích cá nhân vào bài viết.
@@ -60,7 +60,7 @@ System prompt **không bao giờ** dựng lại trong phiên (giữ prompt cache
 - **Không tự chạy lượt chỉ vì tài liệu đổi**: update đi kèm tin nhắn kế tiếp, vì tự chạy sẽ tốn tiền và CEO có thể chưa cần. Đã báo rồi thì không báo lại ở các lượt sau.
 - **Không báo lại thay đổi do chính agent ghi**: tool của nó đã trả nội dung mới rồi. Ví dụ CTO dùng `memory` hoặc `knowledge`. Cách nhận biết:
   - Với COMPANY, USER, MEMORY: dựa vào `documents.author`.
-  - Với knowledge index: mọi tài liệu `knowledge/` đổi kể từ lần so trước đều do agent này ghi.
+  - Với knowledge index: mọi node (tài liệu `knowledge/`) đổi kể từ lần so trước đều do agent này ghi.
   - Thay đổi do CEO (UI ghi `author = "ceo"`) hoặc do agent khác ghi thì luôn được báo.
 - **Sau compaction**, `known` quay về system gốc, vì update cũ có thể chỉ còn trong summary. Lượt kế tiếp gửi lại phần khác biệt so với system.
 - `resume` dựng lại system từ workspace hiện tại, nên không cần báo gì cho tới khi tài liệu đổi tiếp.

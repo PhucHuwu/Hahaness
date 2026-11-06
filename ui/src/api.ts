@@ -159,9 +159,23 @@ export interface DocView {
   author: string | null
 }
 
+/** Một node của bộ tri thức; node con trực tiếp của `knowledge/` là một bộ. */
+export interface KnowledgeNode {
+  id: string
+  name: string
+  title: string
+  summary: string
+  /** Tài liệu của node; không có = node nhóm. */
+  doc?: string
+  size: number
+  updatedAt: number
+  author?: string
+  children: KnowledgeNode[]
+}
+
 export interface KnowledgeView {
   core: Array<{ path: string; size: number; updatedAt: number; author: string | null }>
-  files: DocView[]
+  tree: KnowledgeNode[]
 }
 
 export interface ResultsView {

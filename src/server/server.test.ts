@@ -116,9 +116,15 @@ test("staff: hire via API persists markdown, update and fire", async () => {
 test("knowledge: core files, knowledge/ CRUD, path jail", async () => {
   const put = await send("PUT", "/api/knowledge/file", { path: "knowledge/brand.md", content: "# Brand voice\nFriendly." })
   assert.equal(put.status, 200)
-  const k = await get<{ core: Array<{ path: string }>; files: Array<{ path: string; title: string }> }>("/api/knowledge")
+  await send("PUT", "/api/knowledge/file", { path: "knowledge/brand/logo.md", content: "# Logo\n> Màu và cách đặt logo\nĐỏ." })
+  type Node = { id: string; title: string; summary: string; doc?: string; children: Node[] }
+  const k = await get<{ core: Array<{ path: string }>; tree: Node[] }>("/api/knowledge")
   assert.ok(k.core.some((c) => c.path === "COMPANY.md"))
-  assert.deepEqual(k.files.map((f) => [f.path, f.title]), [["knowledge/brand.md", "Brand voice"]])
+  assert.deepEqual(k.tree.map((n) => [n.id, n.title, n.doc]), [["knowledge/brand", "Brand voice", "knowledge/brand.md"]])
+  assert.deepEqual(k.tree[0]!.children.map((n) => [n.id, n.summary]), [["knowledge/brand/logo", "Màu và cách đặt logo"]])
+  const delNode = await fetch(base + "/api/knowledge/node?path=knowledge%2Fbrand%2Flogo", { method: "DELETE" })
+  assert.equal(delNode.status, 200)
+  assert.ok(!app.docs.has("knowledge/brand/logo.md"))
   const bad = await send("PUT", "/api/knowledge/file", { path: "../outside.md", content: "x" })
   assert.equal(bad.status, 400)
   const core = await send("PUT", "/api/knowledge/file", { path: "COMPANY.md", content: "# Acme\nWe sell anvils." })
