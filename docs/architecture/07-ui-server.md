@@ -46,7 +46,7 @@ Index knowledge cap 80 dòng; vượt thì chỉ còn cấp bộ, rồi gợi ý
 
 | Endpoint | Tác dụng |
 |---|---|
-| `GET /api/results` | `{ deliverables, drafts }` — path, title (heading đầu), updatedAt, author |
+| `GET /api/results` | `{ deliverables, drafts, uploads }` — path, title (heading đầu), updatedAt, author |
 | `GET /api/results/file?path=` | nội dung; path ngoài `deliverables/`/`drafts/` → 400 |
 | `GET /api/results/download?path=` | tải `.md`, `content-disposition` có `filename*=UTF-8''…` cho tên tiếng Việt |
 | `DELETE /api/results/file?path=` | xóa |
@@ -83,6 +83,6 @@ Ví dụ server stdio: `examples/mcp/echo-server.ts`. Test end-to-end: `server.t
 
 ## Giới hạn hiện tại
 
-- Server bind `127.0.0.1`, không auth — chỉ dùng local. Mở ra LAN/Internet cần token (v0.3 cùng với kênh chat).
+- Server mặc định bind `127.0.0.1` (`HOST` để đổi). Mọi `/api/*` cần đăng nhập (`16-auth.md`).
 - SSE không replay: mở trang giữa lượt thì thấy từ sự kiện kế tiếp; `GET /api/sessions/:id` trả transcript đã persist nên phần text đã stream vẫn hiện sau khi lượt kết thúc.
 - Tri thức chỉ nhận text (tạo/sửa trong editor, hoặc dán cho CTO). Chưa upload PDF/DOCX — xem roadmap.

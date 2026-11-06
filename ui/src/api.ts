@@ -4,6 +4,13 @@ export class ApiError extends Error {
   }
 }
 
+const unauthorized = new Set<() => void>()
+/** Đăng ký xử lý khi server trả 401 (hết phiên đăng nhập). */
+export function onUnauthorized(fn: () => void) {
+  unauthorized.add(fn)
+  return () => void unauthorized.delete(fn)
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
@@ -12,6 +19,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   })
   const text = await res.text()
   const data = text ? JSON.parse(text) : null
+  if (res.status === 401 && !path.startsWith("/api/auth")) for (const fn of unauthorized) fn()
   if (!res.ok) throw new ApiError(res.status, data?.error ?? `${res.status} ${res.statusText}`)
   return data as T
 }

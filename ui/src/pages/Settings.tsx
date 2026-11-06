@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { AccountCard } from "./Login.tsx"
 import { api, type Config, type ConfigView, type ProviderConfig, type TelegramStatus } from "../api.ts"
 
 export function Settings() {
@@ -138,6 +139,7 @@ export function Settings() {
           </div>
           <p className="small muted">Phiên chat đang mở vẫn dùng model cũ; phiên mới sẽ dùng cấu hình này.</p>
           <TelegramCard />
+          <AccountCard />
         </div>
       )}
     </div>

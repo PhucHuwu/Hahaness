@@ -7,6 +7,8 @@ import { Skills } from "./pages/Skills.tsx"
 import { Mcp } from "./pages/Mcp.tsx"
 import { Schedules } from "./pages/Schedules.tsx"
 import { useConnectionState } from "./events.ts"
+import { api, onUnauthorized } from "./api.ts"
+import { Login, type AuthState } from "./pages/Login.tsx"
 
 const PAGES = [
   ["chat", "Chat"],
@@ -31,7 +33,27 @@ function useHash() {
   return { page: (PAGES.some(([p]) => p === page) ? page : "chat") as Page, arg: rest.join("/") }
 }
 
+/** Kiểm tra đăng nhập trước khi dựng app (app mở kết nối SSE ngay khi dựng). */
 export function App() {
+  const [auth, setAuth] = useState<AuthState>()
+  const [error, setError] = useState<string>()
+  const check = () =>
+    api.get<AuthState>("/api/auth").then(
+      (a) => (setAuth(a), setError(undefined)),
+      (e) => setError((e as Error).message),
+    )
+  useEffect(() => {
+    void check()
+    // Phiên hết hạn giữa chừng (API trả 401) → quay về màn hình đăng nhập.
+    return onUnauthorized(() => location.reload())
+  }, [])
+  if (error) return <div className="login"><div className="notice err">Không kết nối được server: {error}</div></div>
+  if (!auth) return null
+  if (auth.required && !auth.authenticated) return <Login state={auth} onDone={() => location.reload()} />
+  return <Shell />
+}
+
+function Shell() {
   const { page, arg } = useHash()
   const conn = useConnectionState()
   return (

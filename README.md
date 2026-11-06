@@ -40,7 +40,7 @@ npm test          # test với provider giả + MCP server giả, không cần A
 npm run typecheck
 ```
 
-Server chỉ bind `127.0.0.1`, không có xác thực — dùng trên máy mình.
+Server mặc định chỉ nghe `127.0.0.1` (đặt `HOST=0.0.0.0` để mở ra ngoài, nên dùng sau reverse proxy HTTPS). Lần đầu mở web phải đặt mật khẩu bằng **mã cài đặt** in trong log server (`16-auth.md`).
 
 ## Tài liệu
 
@@ -62,3 +62,4 @@ Server chỉ bind `127.0.0.1`, không có xác thực — dùng trên máy mình
 | [13-telegram](docs/architecture/13-telegram.md) | CEO chat với CTO qua bot Telegram (long polling, ghép nối bằng mã) |
 | [14-uploads](docs/architecture/14-uploads.md) | File gửi kèm: PDF/Excel/Word thành tài liệu `uploads/`, ảnh gửi thẳng cho model |
 | [15-bash](docs/architecture/15-bash.md) | Agent chạy code khi việc cần (tính toán, xử lý file); thư mục làm việc riêng, không lộ secret |
+| [16-auth](docs/architecture/16-auth.md) | Đăng nhập web: một mật khẩu, mã cài đặt lần đầu, cookie phiên, chặn CSRF và dò mật khẩu |
