@@ -76,4 +76,4 @@ ui/            React + Vite: Chat, Kết quả, Tri thức, Kỹ năng, MCP, Cà
   schedules, schedule_runs  việc định kỳ và lịch sử chạy
 ```
 
-Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`, `08-storage.md`, `09-schedules.md`, `10-knowledge-tree.md`, `11-one-session-per-agent.md`.
+Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`, `08-storage.md`, `09-schedules.md`, `10-knowledge-tree.md`, `11-one-session-per-agent.md`, `12-durable-work.md`.

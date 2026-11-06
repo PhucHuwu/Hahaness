@@ -58,3 +58,4 @@ Server chỉ bind `127.0.0.1`, không có xác thực — dùng trên máy mình
 | [09-schedules](docs/architecture/09-schedules.md) | Việc định kỳ: cron, chạy trong phiên CTO, chạy bù, tool bắt buộc |
 | [10-knowledge-tree](docs/architecture/10-knowledge-tree.md) | Kho tri thức: mỗi bộ là một cây, index theo nhánh, `read` theo node |
 | [11-one-session-per-agent](docs/architecture/11-one-session-per-agent.md) | Mỗi agent một phiên chat: giao việc xếp hàng, lịch chạy trong phiên CTO, phiên cũ chỉ xem |
+| [12-durable-work](docs/architecture/12-durable-work.md) | Việc không phụ thuộc trình duyệt; inbox/việc được giao lưu DB, server lên lại tự làm tiếp |

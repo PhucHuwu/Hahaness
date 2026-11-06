@@ -98,9 +98,9 @@ async function runTurn(session, signal) {
 
 ### Durability
 
-- Store là event log append-only trong SQLite: bảng `events` (seq, session_id, kind, data JSON), đọc lại bằng `fold`; metadata ở bảng `sessions` (xem `08-storage.md`). Mỗi dòng = `MessageAppended | PartUpdated | ToolResult | Compaction | Claim | Release`.
+- Store là event log append-only trong SQLite: bảng `events` (seq, session_id, kind, data JSON), đọc lại bằng `fold`; metadata ở bảng `sessions` (xem `08-storage.md`). Mỗi dòng = `MessageAppended | PartUpdated | ToolResult | Compaction | Claim | Release`, cộng inbox và việc được giao (`inbox`, `inbox-taken`, `assign*`, xem `12-durable-work.md`).
 - **Tool-call mồ côi** (có `tool-call` mà không có `tool-result`, do server tắt giữa lúc tool chạy): `repairDangling` ghi result `interrupted: …` (isError) vào store. Chạy ở `Harness.resume` và đầu mỗi `runTurn`. Lý do: API kiểu OpenAI trả 400 cho mọi request có `tool_calls` thiếu tool message → không vá thì phiên hỏng vĩnh viễn.
-- `resume` thấy `staleClaim` (Claim không có Release) hoặc vừa vá tool-call → xếp `RESUMED_AFTER_CRASH` (system message) vào inbox, model thấy ở lượt kế tiếp. **Không tự chạy tiếp**: lượt dở có thể tốn tiền và CEO có thể không còn muốn; CEO nhắn tiếp là đủ.
+- `resume` thấy `staleClaim` (Claim không có Release) hoặc vừa vá tool-call → xếp `RESUMED_AFTER_CRASH` (system message) vào inbox, model thấy ở lượt kế tiếp. Lúc khởi động, `Harness.recover` **chạy lượt đó luôn** (đổi so với trước: việc không được dừng chỉ vì không ai mở web; CEO chấp nhận tốn thêm tiền phần làm lại). Xem `12-durable-work.md`.
 
 ## Những gì cố ý KHÔNG làm ở v1
 

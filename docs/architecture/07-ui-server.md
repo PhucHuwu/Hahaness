@@ -28,7 +28,7 @@ ui/ (React + Vite, build tĩnh)  ──HTTP JSON + SSE──▶  src/server/ (no
 - `Harness.resume(id)`: nạp lại từ bảng `events` (messages + compaction cuối), dựng system prompt **từ tài liệu hiện tại** — nghĩa là sửa COMPANY.md rồi resume phiên cũ sẽ thấy bản mới. Đây là ngoại lệ có chủ ý của "đóng băng per-session": resume là ranh giới phiên mới về mặt cache.
 - `POST …/messages` push inbox và trả `{ok}` ngay; kết quả đi qua SSE. Trạng thái `running` theo `turn` event.
 - **Direct mode** `@writer <task>` từ UI → `POST …/direct` → `spawn(background, wakeLead: false)`: việc vào phiên của writer, báo cáo rơi vào inbox CTO nhưng **không đánh thức** CTO (tránh CTO tự trả lời CEO khi CEO không hỏi). CEO thấy kết quả ở phiên của writer (sidebar) và CTO thấy ở lượt sau. `@` chỉ dùng trong phiên agent primary (400 nếu gọi từ phiên nhân viên).
-- `question` tool và permission `ask`: server giữ promise, phát `question` event, UI render ô trả lời trong chat, `POST /api/questions/:id` resolve. Tool `question` không nhận sessionID qua handler nên server theo dõi phiên vừa gọi `question` qua `onToolStart` (đủ vì `question` là serial và chỉ CTO có).
+- Tool `question` không chờ: lượt kết thúc, UI hiện câu hỏi từ tool-call cuối chưa được trả lời, trả lời = gửi tin nhắn (`12-durable-work.md`). Permission `ask`: server giữ promise, phát `question` event, UI render ô trả lời, `POST /api/questions/:id` resolve.
 
 ## Tri thức (Knowledge)
 
