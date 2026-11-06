@@ -76,7 +76,30 @@ export function documentTools(docs: DocumentStore) {
     },
   })
 
-  return [read, list, search, write]
+  const edit = define({
+    name: "edit",
+    description:
+      "Change part of an existing company document without rewriting it: replace the exact text `old` with `new`. `old` must appear exactly once (add surrounding lines to make it unique) unless `all` is true. Prefer this over `write` for small changes to long documents.",
+    input: z.object({
+      path: z.string(),
+      old: z.string().min(1).describe("Exact text currently in the document"),
+      new: z.string().describe("Replacement text (empty to delete)"),
+      all: z.boolean().optional().describe("Replace every occurrence"),
+    }),
+    permission: { action: "write", resource: (i) => safe(i.path) },
+    async execute({ path, old, new: next, all }, ctx) {
+      const doc = docs.get(path)
+      if (!doc) return { output: `No document "${path}". Use write to create it.`, isError: true }
+      const count = doc.content.split(old).length - 1
+      if (count === 0) return { output: `The text to replace was not found in ${doc.path}. Read the document again and copy the exact text.`, isError: true }
+      if (count > 1 && !all) return { output: `The text appears ${count} times in ${doc.path}. Include more surrounding text so it is unique, or set all: true.`, isError: true }
+      const content = all ? doc.content.split(old).join(next) : doc.content.replace(old, () => next)
+      const p = docs.put(path, content, ctx.agent)
+      return { output: `Edited ${p} (${count} replacement${count > 1 ? "s" : ""}, now ${content.length} chars)`, metadata: { filesTouched: [p] } }
+    },
+  })
+
+  return [read, list, search, write, edit]
 }
 
 /** Resource cho permission: path chuẩn hóa; path lỗi trả nguyên để execute báo lỗi. */

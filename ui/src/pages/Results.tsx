@@ -19,7 +19,7 @@ function decode(s: string) {
 }
 
 function name(path: string) {
-  return path.replace(/^(deliverables|drafts)\//, "")
+  return path.replace(/^(deliverables|drafts|uploads)\//, "")
 }
 
 /** Kết quả công việc: deliverables (CTO nộp cho CEO) và drafts (bản nháp nhân viên). */
@@ -62,7 +62,7 @@ export function Results({ path }: { path?: string }) {
     <div className="page">
       <header>
         <h1>Kết quả</h1>
-        <p>Tài liệu CTO đã hoàn thành cho bạn, và bản nháp của nhân viên.</p>
+        <p>Tài liệu CTO đã hoàn thành cho bạn, bản nháp của nhân viên, và file bạn đã gửi (dạng chữ).</p>
       </header>
       {error && <div className="notice err" style={{ marginBottom: 16 }}>{error}</div>}
       {!view && !error && <div className="empty">Đang tải…</div>}
@@ -71,6 +71,7 @@ export function Results({ path }: { path?: string }) {
           <div className="stack" style={{ overflow: "auto" }}>
             {section("Đã hoàn thành", view.deliverables, "Chưa có. Giao việc cho CTO trong Chat; kết quả cuối sẽ xuất hiện ở đây.")}
             {section("Bản nháp", view.drafts, "Chưa có bản nháp.")}
+            {section("File bạn gửi", view.uploads ?? [], "Chưa có. Gửi kèm file trong Chat (nút 📎) hoặc qua Telegram.")}
           </div>
           <div className="card" style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
             {selected ? (

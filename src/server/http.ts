@@ -67,9 +67,17 @@ export class Router {
   }
 }
 
+const MAX_BODY = 110 * 1024 * 1024
+
 async function readJson<T>(raw: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = []
-  for await (const c of raw) chunks.push(c as Buffer)
+  let size = 0
+  for await (const c of raw) {
+    size += (c as Buffer).length
+    // File đính kèm đi trong JSON dạng base64 (~1.33×): 4 file 20 MB vẫn lọt.
+    if (size > MAX_BODY) throw new HttpError(413, "Dữ liệu gửi lên quá lớn (tối đa khoảng 100 MB mỗi lần).")
+    chunks.push(c as Buffer)
+  }
   const text = Buffer.concat(chunks).toString("utf8")
   if (!text) return {} as T
   try {

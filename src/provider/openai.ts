@@ -12,7 +12,8 @@ export interface OpenAIConfig {
 }
 
 type ChatMessage =
-  | { role: "system" | "user"; content: string }
+  | { role: "system"; content: string }
+  | { role: "user"; content: string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> }
   | { role: "assistant"; content: string | null; tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> }
   | { role: "tool"; tool_call_id: string; content: string }
 
@@ -130,7 +131,14 @@ export function retryAfter(h: Headers): number | undefined {
 function toChatMessages(messages: Message[]): ChatMessage[] {
   const out: ChatMessage[] = []
   for (const m of messages) {
-    if (m.role === "user" || m.role === "system") {
+    if (m.role === "user" && m.parts.some((p) => p.type === "image")) {
+      out.push({
+        role: "user",
+        content: m.parts.flatMap((p): Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> =>
+          p.type === "text" ? [{ type: "text", text: p.text }] : p.type === "image" ? [{ type: "image_url", image_url: { url: `data:${p.mime};base64,${p.data}` } }] : [],
+        ),
+      })
+    } else if (m.role === "user" || m.role === "system") {
       const text = m.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")
       out.push({ role: m.role, content: text })
     } else if (m.role === "assistant") {

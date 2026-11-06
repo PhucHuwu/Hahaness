@@ -22,6 +22,7 @@ import { skill } from "./tool/builtin/skill.ts"
 import { knowledgeTool, manageSkillTool, mcpTool, staffTool } from "./tool/builtin/manage.ts"
 import { scheduleTool } from "./tool/builtin/schedule.ts"
 import { Scheduler } from "./schedule/scheduler.ts"
+import { TelegramChannel } from "./channel/telegram.ts"
 import type { AskHandler } from "./permission/ask.ts"
 import type { LoopEvents } from "./core/loop.ts"
 
@@ -40,6 +41,7 @@ export interface App {
   mcp: McpManager
   harness: Harness
   scheduler: Scheduler
+  telegram: TelegramChannel
   close(): void
 }
 
@@ -56,6 +58,8 @@ export interface BootstrapOptions {
   onScheduleChange?: (scheduleID: string) => void
   /** false → không tự làm tiếp việc dở lúc khởi động (test). */
   recover?: boolean
+  /** false → không kết nối Telegram lúc khởi động (test). */
+  channels?: boolean
 }
 
 export function defaultDbPath(cwd: string) {
@@ -103,7 +107,9 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
   )
   await mcp.load({ connect: opts.mcp !== false })
 
-  const harness = new Harness({
+  let harness!: Harness
+  const telegram = new TelegramChannel(db, () => harness)
+  harness = new Harness({
     cwd,
     db,
     docs,
@@ -116,18 +122,30 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
     fallbackModels: config.fallbackModels,
     permissions: [{ action: "*", resource: "*", effect: "allow" }],
     askHandler: opts.askHandler,
-    events: opts.events,
+    events: {
+      ...opts.events,
+      onTurnStart: (sessionID) => {
+        opts.events.onTurnStart?.(sessionID)
+        telegram.turnStarted(sessionID)
+      },
+      onTurnEnd: (sessionID, outcome) => {
+        opts.events.onTurnEnd?.(sessionID, outcome)
+        void telegram.turnEnded(sessionID, outcome)
+      },
+    },
   })
 
   scheduler.attach(harness)
 
   const close = () => {
     scheduler.stop()
+    telegram.stop()
     mcp.closeAll()
     db.close()
   }
-  const app: App = { cwd, db, docs, config, providerError, agents, tools, skills, mcp, harness, scheduler, close }
+  const app: App = { cwd, db, docs, config, providerError, agents, tools, skills, mcp, harness, scheduler, telegram, close }
   if (opts.scheduler !== false) scheduler.start()
+  if (opts.channels !== false) telegram.start()
   // Làm tiếp việc dở từ trước khi tắt (không chờ ai mở web). Chưa cấu hình provider thì lượt sẽ lỗi → để sau.
   if (opts.recover !== false && !providerError) void harness.recover().catch((e) => console.error("recover:", (e as Error).message))
   return app

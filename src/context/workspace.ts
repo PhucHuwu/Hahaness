@@ -42,6 +42,8 @@ export const USER_TEMPLATE = `# CEO
 export const KNOWLEDGE_DIR = KNOWLEDGE_ROOT
 export const DRAFTS_DIR = "drafts"
 export const DELIVERABLES_DIR = "deliverables"
+/** File CEO gửi kèm tin nhắn, đã chuyển thành chữ (`src/upload/attachments.ts`). */
+export const UPLOADS_DIR = "uploads"
 
 export function ensure(docs: DocumentStore) {
   docs.ensure(FILES.company, COMPANY_TEMPLATE)

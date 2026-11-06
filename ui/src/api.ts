@@ -141,6 +141,15 @@ export interface Config {
   providers: Record<string, ProviderConfig>
 }
 
+export interface TelegramStatus {
+  configured: boolean
+  bot?: string
+  linked?: string
+  pairCode?: string
+  running: boolean
+  error?: string
+}
+
 export interface ConfigView {
   /** File SQLite chứa toàn bộ dữ liệu công ty. */
   db: string
@@ -181,6 +190,7 @@ export interface KnowledgeView {
 export interface ResultsView {
   deliverables: DocView[]
   drafts: DocView[]
+  uploads: DocView[]
 }
 
 export interface Doc extends DocView {

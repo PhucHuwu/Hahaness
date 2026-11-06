@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { api, type Config, type ConfigView, type ProviderConfig } from "../api.ts"
+import { api, type Config, type ConfigView, type ProviderConfig, type TelegramStatus } from "../api.ts"
 
 export function Settings() {
   const [view, setView] = useState<ConfigView>()
@@ -137,6 +137,7 @@ export function Settings() {
             {dirty && !saved && <span className="small muted">Có thay đổi chưa lưu.</span>}
           </div>
           <p className="small muted">Phiên chat đang mở vẫn dùng model cũ; phiên mới sẽ dùng cấu hình này.</p>
+          <TelegramCard />
         </div>
       )}
     </div>
@@ -218,6 +219,81 @@ function ProviderCard({ id, p, onChange, onRename, onRemove }: { id: string; p: 
           <input type="text" className="mono" value={p.module} onChange={(e) => onChange({ ...p, module: e.target.value })} />
         </label>
       )}
+    </div>
+  )
+}
+
+/** Chat với CTO qua bot Telegram: dán token từ @BotFather, rồi gửi mã ghép nối cho bot. */
+function TelegramCard() {
+  const [st, setSt] = useState<TelegramStatus>()
+  const [token, setToken] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const run = async (fn: () => Promise<TelegramStatus>) => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      setSt(await fn())
+      setToken("")
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  useEffect(() => void run(() => api.get<TelegramStatus>("/api/telegram")), [])
+  // Chờ CEO gửi mã cho bot → tự cập nhật khi đã liên kết.
+  useEffect(() => {
+    if (!st?.pairCode) return
+    const t = setInterval(() => void api.get<TelegramStatus>("/api/telegram").then(setSt, () => {}), 3000)
+    return () => clearInterval(t)
+  }, [st?.pairCode])
+
+  return (
+    <div className="card stack">
+      <div className="row between">
+        <h2>Telegram</h2>
+        {st?.linked ? <span className="badge ok">đã liên kết</span> : st?.configured ? <span className="badge">chờ liên kết</span> : null}
+      </div>
+      <p className="small muted">Nhắn với CTO qua Telegram như trên web. CTO trả lời, hỏi bạn và báo việc xong cũng qua đó, kể cả khi bạn không mở web.</p>
+      {error && <div className="notice err small">{error}</div>}
+      {st?.error && <div className="notice err small">Lỗi kết nối Telegram: {st.error}</div>}
+      {st?.linked && (
+        <div className="row between">
+          <span>
+            Bot <b>@{st.bot}</b> đang nói chuyện với <b>{st.linked}</b>.
+          </span>
+          <button className="btn small" disabled={busy} onClick={() => run(() => api.post<TelegramStatus>("/api/telegram/unlink"))}>
+            Đổi người dùng
+          </button>
+        </div>
+      )}
+      {st?.configured && !st.linked && st.pairCode && (
+        <div className="stack">
+          <div>
+            Mở Telegram, tìm bot {st.bot ? <a href={`https://t.me/${st.bot}?start=${st.pairCode}`} target="_blank" rel="noreferrer">@{st.bot}</a> : "của bạn"} và bấm <b>Start</b>, hoặc gửi cho bot mã:
+          </div>
+          <code style={{ fontSize: 20 }}>{st.pairCode}</code>
+          <div className="small muted">Trang này tự cập nhật khi liên kết xong. Chỉ người gửi đúng mã mới chat được với CTO.</div>
+        </div>
+      )}
+      {!st?.configured && (
+        <ol className="small" style={{ margin: 0, paddingLeft: 18 }}>
+          <li>Trong Telegram, nhắn cho <a href="https://t.me/BotFather" target="_blank" rel="noreferrer">@BotFather</a> lệnh <code>/newbot</code>, đặt tên cho bot.</li>
+          <li>BotFather gửi lại một token dạng <code>123456:ABC…</code>. Dán vào ô dưới và bấm Kết nối.</li>
+        </ol>
+      )}
+      <div className="row">
+        <input type="text" className="mono grow" value={token} placeholder={st?.configured ? "Dán token mới để đổi bot" : "123456789:ABC…"} autoComplete="off" spellCheck={false} onChange={(e) => setToken(e.target.value)} />
+        <button className="btn primary" disabled={busy || !token.trim()} onClick={() => run(() => api.put<TelegramStatus>("/api/telegram", { token }))}>
+          {busy ? "Đang kết nối…" : "Kết nối"}
+        </button>
+        {st?.configured && (
+          <button className="btn danger" disabled={busy} onClick={() => confirm("Ngắt kết nối Telegram?") && run(() => api.delete<TelegramStatus>("/api/telegram"))}>
+            Ngắt
+          </button>
+        )}
+      </div>
     </div>
   )
 }

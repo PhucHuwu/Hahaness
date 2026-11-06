@@ -13,7 +13,7 @@ const SKILLS_SOURCE = "skills/index"
 export const RESUMED_AFTER_CRASH =
   "[harness] Your previous turn in this conversation was cut off (the app was restarted). Tool calls marked \"interrupted\" may or may not have taken effect; check the workspace before redoing them."
 import { SessionStore } from "./core/store.ts"
-import type { Compaction, Message, Outcome, Session, UsageRecord } from "./core/types.ts"
+import type { Compaction, Message, Outcome, Part, Session, UsageRecord } from "./core/types.ts"
 import { addTotals, contextBreakdown, summarizeUsage, type ContextBreakdown, type UsageSummary, type UsageTotals } from "./context/usage.ts"
 import { build as buildSystem } from "./context/system.ts"
 import { changed, environment, removed, updateNotice, type InstructionSource } from "./context/instructions.ts"
@@ -275,9 +275,10 @@ export class Harness {
    * Đẩy message vào inbox; nếu session đang idle thì chạy turn mới.
    * `from`: "ceo" (mặc định) hoặc id agent gửi (vd CTO steer nhân viên) — chỉ là metadata cho UI.
    */
-  send(sessionID: string, text: string, delivery: "queue" | "steer" = "steer", from = "ceo"): Promise<Outcome> {
+  send(sessionID: string, text: string, delivery: "queue" | "steer" = "steer", from = "ceo", attachments: Part[] = []): Promise<Outcome> {
     const live = this.get(sessionID)
-    const msg: Message = { id: id("msg"), role: "user", source: from === "ceo" ? "user" : "agent", from, createdAt: Date.now(), parts: [{ type: "text", text }] }
+    const parts: Part[] = [...(text ? [{ type: "text" as const, text }] : []), ...attachments]
+    const msg: Message = { id: id("msg"), role: "user", source: from === "ceo" ? "user" : "agent", from, createdAt: Date.now(), parts }
     live.inbox.push(live.running ? delivery : "queue", msg)
     return this.wake(live)
   }
@@ -697,7 +698,7 @@ export class Harness {
     const writes = new Map<string, string>()
     for (const m of messages)
       for (const p of m.parts) {
-        if (p.type === "tool-call" && p.name === "write") writes.set(p.callID, String((p.args as any)?.path ?? ""))
+        if (p.type === "tool-call" && (p.name === "write" || p.name === "edit")) writes.set(p.callID, String((p.args as any)?.path ?? ""))
         if (p.type === "tool-result" && writes.has(p.callID)) {
           const path = writes.get(p.callID)!
           if (p.isError) failed.set(path, String(p.output).split("\n")[0]!.slice(0, 160))

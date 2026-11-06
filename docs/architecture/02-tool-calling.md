@@ -75,6 +75,7 @@ Không có shell, không edit code. Tool tài liệu (`documentTools(docs)`) đ�
 | `list` | liệt kê "thư mục" tài liệu | `read` | mọi vai |
 | `search` | tìm cụm từ trong tài liệu (không phân biệt hoa thường, cả tiếng Việt) | `read` | mọi vai |
 | `write` | tạo/ghi đè tài liệu | `write` (resource = path, nhân viên chỉ `drafts/*`) | CTO, writer, marketer |
+| `edit` | thay một đoạn chữ chính xác trong tài liệu (`old` → `new`, `all?`); không thấy hoặc thấy nhiều chỗ → lỗi hướng dẫn model sửa | `write` (như trên) | ai có `write` |
 | `webfetch` | tải trang → text | `webfetch` (resource = hostname) | CTO, researcher, writer, marketer |
 | `websearch` | tìm web (DuckDuckGo HTML, không cần key) | `websearch` | researcher |
 | `question` | hỏi CEO một câu kèm lựa chọn | — (hard deny cho nhân viên) | CTO |

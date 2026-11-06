@@ -159,6 +159,9 @@ function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: 
   const [loadError, setLoadError] = useState<string>()
   const [sendError, setSendError] = useState<string>()
   const [text, setText] = useState("")
+  const [files, setFiles] = useState<File[]>([])
+  const [sending, setSending] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
   const logRef = useRef<HTMLDivElement>(null)
 
   const load = useCallback(async () => {
@@ -192,10 +195,19 @@ function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: 
 
   const send = async () => {
     const t = text.trim()
-    if (!t) return
+    if (!t && files.length === 0) return
     setSendError(undefined)
-    const direct = isPrimary ? /^@([\w-]+)\s+([\s\S]+)$/.exec(t) : null
+    const direct = isPrimary && files.length === 0 ? /^@([\w-]+)\s+([\s\S]+)$/.exec(t) : null
     try {
+      if (files.length > 0) {
+        setSending(true)
+        const payload = await Promise.all(files.map(async (f) => ({ name: f.name, mime: f.type, data: await toBase64(f) })))
+        await api.post(`/api/sessions/${sessionID}/messages`, { text: t, files: payload })
+        setState((s) => ({ ...s, messages: [...s.messages, userMessage(t, files.map((f) => f.name))], error: undefined }))
+        setText("")
+        setFiles([])
+        return
+      }
       if (direct) {
         const [, agent, task] = direct
         if (!staff.some((s) => s.id === agent)) {
@@ -211,6 +223,8 @@ function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: 
       setText("")
     } catch (e) {
       setSendError(e instanceof ApiError && e.status === 409 ? `${e.message} — vào Cài đặt để cấu hình provider.` : (e as Error).message)
+    } finally {
+      setSending(false)
     }
   }
 
@@ -286,8 +300,49 @@ function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: 
       ) : (
       <div className="chat-compose">
         {sendError && <div className="notice err small" style={{ marginBottom: 8 }}>{sendError}</div>}
-        <div className="row" style={{ alignItems: "flex-end" }}>
+        {files.length > 0 && (
+          <div className="attach-list">
+            {files.map((f, i) => (
+              <span key={i} className="attach-chip">
+                📎 {f.name} <span className="muted">{fmtSize(f.size)}</span>
+                <button className="link" title="Bỏ file này" onClick={() => setFiles(files.filter((_, j) => j !== i))}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div
+          className="row"
+          style={{ alignItems: "flex-end" }}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault()
+            if (e.dataTransfer.files.length) setFiles([...files, ...e.dataTransfer.files])
+          }}
+        >
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            hidden
+            accept=".pdf,.xlsx,.xlsm,.docx,.csv,.tsv,.txt,.md,.json,image/png,image/jpeg,image/webp,image/gif"
+            onChange={(e) => {
+              if (e.target.files) setFiles([...files, ...e.target.files])
+              e.target.value = ""
+            }}
+          />
+          <button className="btn" title="Đính kèm file: PDF, Excel, Word, CSV, ảnh" onClick={() => fileRef.current?.click()}>
+            📎
+          </button>
           <textarea
+            onPaste={(e) => {
+              const pasted = [...e.clipboardData.files]
+              if (pasted.length) {
+                e.preventDefault()
+                setFiles([...files, ...pasted])
+              }
+            }}
             className="grow"
             value={text}
             placeholder={state.running ? `Gửi thêm chỉ dẫn cho ${myName} đang làm…` : `Nhắn cho ${myName}…`}
@@ -299,12 +354,12 @@ function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: 
               }
             }}
           />
-          <button className="btn primary" onClick={send} disabled={!text.trim()}>
-            Gửi
+          <button className="btn primary" onClick={send} disabled={sending || (!text.trim() && files.length === 0)}>
+            {sending ? "Đang gửi…" : "Gửi"}
           </button>
         </div>
         <div className="hint">
-          Enter để gửi, Shift+Enter xuống dòng.
+          Enter để gửi, Shift+Enter xuống dòng. Kéo thả hoặc dán file/ảnh vào đây để gửi kèm.
           {isPrimary ? (
             <>
               {" "}Giao việc thẳng cho nhân viên: <code>@writer viết email chào mừng</code>
@@ -390,7 +445,27 @@ function MessageView({ m, agentName }: { m: Message; agentName: (id: string) => 
       )
     }
     if (m.source === "system") return <div className="msg system">{text}</div>
-    return <div className="msg user">{text}</div>
+    const said = m.parts.flatMap((p) => (p.type === "text" && !p.text.startsWith("<attachments>") ? [p.text] : [])).join("\n")
+    const names = attachedNames(m)
+    const images = m.parts.flatMap((p) => (p.type === "image" ? [p] : []))
+    return (
+      <div className="msg user">
+        {said}
+        {(names.length > 0 || images.length > 0) && (
+          <div className="attach-list">
+            {names.map((n, i) => (
+              <span key={i} className="attach-chip">
+                📎 {n.name}
+                {n.path && <a href={`#results/${encodeURIComponent(n.path)}`} className="muted small" style={{ marginLeft: 6 }}>{n.summary}</a>}
+              </span>
+            ))}
+            {images.map((p, i) => (
+              <img key={i} className="attach-img" src={`data:${p.mime};base64,${p.data}`} alt="" />
+            ))}
+          </div>
+        )}
+      </div>
+    )
   }
   if (m.role !== "assistant") return null
   const calls = new Map<string, Part & { type: "tool-call" }>()
@@ -451,4 +526,31 @@ function SubagentResult({ text, agentName }: { text: string; agentName: (id: str
       {body}
     </div>
   )
+}
+
+/** File trong khối `<attachments>` (server tạo) hoặc tên file của tin vừa gửi (chưa có từ server). */
+function attachedNames(m: Message): Array<{ name: string; path?: string; summary?: string }> {
+  const out: Array<{ name: string; path?: string; summary?: string }> = []
+  for (const p of m.parts) {
+    if (p.type !== "text" || !p.text.startsWith("<attachments>")) continue
+    for (const f of p.text.matchAll(/<file name="([^"]*)"(?: kind="image")?(?: path="([^"]*)")?(?: summary="([^"]*)")?>/g)) {
+      const un = (s?: string) => s?.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&amp;/g, "&")
+      if (/ kind="image"/.test(f[0])) continue
+      out.push({ name: un(f[1])!, path: un(f[2]), summary: un(f[3]) })
+    }
+  }
+  return out
+}
+
+function toBase64(f: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(String(r.result).replace(/^data:[^,]*,/, ""))
+    r.onerror = () => reject(r.error)
+    r.readAsDataURL(f)
+  })
+}
+
+function fmtSize(n: number) {
+  return n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`
 }

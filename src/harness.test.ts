@@ -1358,3 +1358,30 @@ test("question: ends the CTO turn without waiting; the CEO's later message is th
     await cleanup()
   }
 })
+
+test("edit: replaces one exact passage; missing or ambiguous text is an error the model can fix; employees stay inside drafts/", async () => {
+  const db = new Db(":memory:")
+  try {
+    const docs = new DocumentStore(db)
+    const edit = documentTools(docs).find((t) => t.name === "edit")!
+    docs.put("knowledge/price.md", "# Giá\nGói A: 100k\nGói B: 200k\nGhi chú: 100k")
+    const ctx = { agent: "cto" } as any
+    const run = (input: unknown) => edit.execute(edit.schema.parse(input), ctx)
+    let r = await run({ path: "knowledge/price.md", old: "Gói A: 100k", new: "Gói A: 120k" })
+    assert.ok(!r.isError)
+    assert.equal(docs.get("knowledge/price.md")!.content, "# Giá\nGói A: 120k\nGói B: 200k\nGhi chú: 100k")
+    r = await run({ path: "knowledge/price.md", old: "Gói C", new: "x" })
+    assert.ok(r.isError && /not found/.test(r.output))
+    r = await run({ path: "knowledge/price.md", old: "00k", new: "x" })
+    assert.ok(r.isError && /2 times/.test(r.output))
+    r = await run({ path: "knowledge/price.md", old: "00k", new: "00.000", all: true })
+    assert.ok(!r.isError)
+    assert.match(docs.get("knowledge/price.md")!.content, /Gói B: 200\.000/)
+    r = await run({ path: "nope.md", old: "a", new: "b" })
+    assert.ok(r.isError)
+    // Cùng permission với write: nhân viên có quyền viết chỉ sửa được drafts/.
+    assert.equal(edit.permission?.resource?.({ path: "./drafts/x.md", old: "a", new: "b" }), "drafts/x.md")
+  } finally {
+    db.close()
+  }
+})

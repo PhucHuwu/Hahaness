@@ -23,6 +23,8 @@ export interface ServerOptions {
   scheduler?: boolean
   /** false → không tự làm tiếp việc dở lúc khởi động (test). */
   recover?: boolean
+  /** false → không kết nối Telegram (test). */
+  channels?: boolean
 }
 
 /**
@@ -55,6 +57,7 @@ export async function startServer(opts: ServerOptions) {
     dbPath: opts.dbPath,
     scheduler: opts.scheduler,
     recover: opts.recover,
+    channels: opts.channels,
     onScheduleChange: (scheduleID) => bus.emit({ type: "schedule", id: scheduleID }),
     askHandler: async (req) => {
       const a = await ask(req.sessionID, "permission", `${req.agent} wants to ${req.action} ${req.resource}`, ["Allow", "Deny"])

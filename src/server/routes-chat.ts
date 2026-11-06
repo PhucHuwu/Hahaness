@@ -1,5 +1,6 @@
 import type { App } from "../bootstrap.ts"
-import type { Message, Session } from "../core/types.ts"
+import type { Message, Part, Session } from "../core/types.ts"
+import { attach, UploadError } from "../upload/attachments.ts"
 import { HttpError, type Router } from "./http.ts"
 import { homeSessions } from "../harness.ts"
 
@@ -105,11 +106,22 @@ export function chatRoutes(r: Router, app: App) {
 
   r.post("/api/sessions/:id/messages", async (req) => {
     const id = req.params.id!
-    const body = await req.json<{ text?: string; delivery?: "queue" | "steer" }>()
-    if (!body.text?.trim()) throw new HttpError(400, "text is required")
+    const body = await req.json<{ text?: string; delivery?: "queue" | "steer"; files?: Array<{ name?: string; mime?: string; data?: string }> }>()
+    const files = body.files ?? []
+    if (!body.text?.trim() && files.length === 0) throw new HttpError(400, "text is required")
     if (app.providerError) throw new HttpError(409, app.providerError)
     await homeOnly(id)
-    void harness.send(id, body.text, body.delivery ?? "steer")
+    let parts: Part[] = []
+    try {
+      parts = await attach(
+        harness.cfg.docs,
+        files.map((f) => ({ name: f.name ?? "file", mime: f.mime, data: Buffer.from(f.data ?? "", "base64") })),
+      )
+    } catch (e) {
+      if (e instanceof UploadError) throw new HttpError(400, e.message)
+      throw e
+    }
+    void harness.send(id, body.text?.trim() ?? "", body.delivery ?? "steer", "ceo", parts)
     return { ok: true }
   })
 

@@ -9,7 +9,7 @@ import type { McpServerConfig } from "../mcp/client.ts"
 import { HttpError, type Router } from "./http.ts"
 
 const CORE = [workspace.FILES.company, workspace.FILES.user, workspace.FILES.memory] as string[]
-const OUTPUT_DIRS = [workspace.DELIVERABLES_DIR, workspace.DRAFTS_DIR]
+const OUTPUT_DIRS = [workspace.DELIVERABLES_DIR, workspace.DRAFTS_DIR, workspace.UPLOADS_DIR]
 
 function param(req: { url: URL }, key: string) {
   const v = req.url.searchParams.get(key)
@@ -57,6 +57,23 @@ export function adminRoutes(r: Router, app: App) {
       app.providerError = (e as Error).message
     }
     return { ok: true, providerError: app.providerError ?? null }
+  })
+
+  // ---- Telegram: CEO chat với CTO qua bot -----------------------------------------
+  r.get("/api/telegram", () => app.telegram.status())
+  r.put("/api/telegram", async (req) => {
+    const body = await req.json<{ token?: string }>()
+    if (!body.token?.trim()) throw new HttpError(400, "Cần token của bot (lấy từ @BotFather).")
+    try {
+      return await app.telegram.configure(body.token)
+    } catch (e) {
+      throw new HttpError(400, (e as Error).message)
+    }
+  })
+  r.post("/api/telegram/unlink", () => app.telegram.unlink())
+  r.delete("/api/telegram", () => {
+    app.telegram.remove()
+    return app.telegram.status()
   })
 
   r.post("/api/config/test", async (req) => {
@@ -128,6 +145,7 @@ export function adminRoutes(r: Router, app: App) {
   r.get("/api/results", () => ({
     deliverables: docs.list(workspace.DELIVERABLES_DIR).map(view).sort(newest),
     drafts: docs.list(workspace.DRAFTS_DIR).map(view).sort(newest),
+    uploads: docs.list(workspace.UPLOADS_DIR).map(view).sort(newest),
   }))
 
   r.get("/api/results/file", (req) => {

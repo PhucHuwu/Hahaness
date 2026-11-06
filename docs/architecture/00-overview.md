@@ -56,12 +56,14 @@ src/
   provider/    ProviderClient, registry (provider/model), openai-compatible
   config.ts    config trong DB, {env:VAR}, custom provider module
   tool/        define, registry, execute pipeline, output truncation
-    builtin/   read, list, search, write, webfetch, websearch, todo, memory, question, delegate, hire, skill,
+    builtin/   read, list, search, write, edit, webfetch, websearch, todo, memory, question, delegate, hire, skill,
                manage (knowledge, manage_skill, staff, mcp_manage), schedule
   context/     system tiers, documents (DocumentStore), workspace (COMPANY/USER/MEMORY), knowledge (cây tri thức), skills, budget, compaction
   permission/  ruleset, ask gate
   agent/       registry (markdown ↔ AgentDef, hire/edit/update/fire, overlay từ DB), builtin/ (cto, researcher, writer, marketer, analyst)
   mcp/         client (JSON-RPC stdio/http), manager (bảng mcp_servers → ToolRegistry)
+  upload/      file CEO gửi kèm (PDF/Excel/Word/CSV → tài liệu uploads/, ảnh → model)
+  channel/     telegram (CEO chat với CTO qua bot Telegram, long polling)
   schedule/    cron (parse/nextRun), scheduler (bảng schedules → tick 30s → phiên CTO mới)
   harness.ts   sessions, resume, spawn fg/bg, ResultEntry, fork context
   bootstrap.ts wiring chuẩn cho server (và test)
@@ -76,4 +78,4 @@ ui/            React + Vite: Chat, Kết quả, Tri thức, Kỹ năng, MCP, Cà
   schedules, schedule_runs  việc định kỳ và lịch sử chạy
 ```
 
-Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`, `08-storage.md`, `09-schedules.md`, `10-knowledge-tree.md`, `11-one-session-per-agent.md`, `12-durable-work.md`.
+Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`, `08-storage.md`, `09-schedules.md`, `10-knowledge-tree.md`, `11-one-session-per-agent.md`, `12-durable-work.md`, `13-telegram.md`, `14-uploads.md`.

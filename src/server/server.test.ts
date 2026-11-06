@@ -95,6 +95,24 @@ test("chat: create session, send message, stream text over SSE, transcript persi
   assert.ok(list.some((x) => x.session.id === s.session.id))
 })
 
+test("chat: files attached to a message become documents and reach the model; bad files are rejected", async () => {
+  const { data: s } = await send<{ session: { id: string } }>("POST", "/api/sessions", { agent: "cto" })
+  const bad = await send<{ error: string }>("POST", `/api/sessions/${s.session.id}/messages`, { text: "x", files: [{ name: "virus.exe", data: "AAAA" }] })
+  assert.equal(bad.status, 400)
+  assert.match(bad.data.error, /Chưa đọc được loại file/)
+  const done = waitEvent((ev) => ev.type === "turn" && ev.sessionID === s.session.id && ev.running === false)
+  const csv = Buffer.from("tháng,doanh thu\n1,100\n2,150").toString("base64")
+  const { status } = await send("POST", `/api/sessions/${s.session.id}/messages`, { text: "", files: [{ name: "dt.csv", mime: "text/csv", data: csv }] })
+  assert.equal(status, 200)
+  await done
+  assert.equal(app.docs.get("uploads/dt.csv.md")?.content, "# dt.csv\n\ntháng,doanh thu\n1,100\n2,150")
+  const d = await get<{ messages: Array<{ role: string; parts: Array<{ type: string; text?: string }> }> }>(`/api/sessions/${s.session.id}`)
+  const user = d.messages.filter((m) => m.role === "user").at(-1)!
+  assert.match(user.parts[0]!.text!, /<attachments>[\s\S]*2,150/)
+  const list = await get<{ uploads: Array<{ path: string }> }>("/api/results")
+  assert.ok(list.uploads.some((u) => u.path === "uploads/dt.csv.md"))
+})
+
 test("staff: hire via API persists markdown, update and fire", async () => {
   const { status, data } = await send<{ id: string }>("POST", "/api/staff", { id: "SEO Guy", name: "SEO", description: "seo", system: "You do SEO.", capabilities: ["read", "websearch"] })
   assert.equal(status, 200)

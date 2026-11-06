@@ -63,6 +63,9 @@ function closeAssistant(messages: Message[]): Message[] {
   return [...messages.slice(0, -1), { ...cur, id: `local_${cur.createdAt}` }]
 }
 
-export function userMessage(text: string): Message {
-  return { id: `local_${Date.now()}`, role: "user", source: "user", createdAt: Date.now(), parts: [{ type: "text", text }] }
+export function userMessage(text: string, files: string[] = []): Message {
+  const list = files.map((n) => `<file name="${n.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")}">`).join("\n")
+  const parts: Message["parts"] = [{ type: "text", text }]
+  if (files.length) parts.push({ type: "text", text: `<attachments>\n${list}\n</attachments>` })
+  return { id: `local_${Date.now()}`, role: "user", source: "user", createdAt: Date.now(), parts }
 }

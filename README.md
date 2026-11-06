@@ -59,3 +59,5 @@ Server chỉ bind `127.0.0.1`, không có xác thực — dùng trên máy mình
 | [10-knowledge-tree](docs/architecture/10-knowledge-tree.md) | Kho tri thức: mỗi bộ là một cây, index theo nhánh, `read` theo node |
 | [11-one-session-per-agent](docs/architecture/11-one-session-per-agent.md) | Mỗi agent một phiên chat: giao việc xếp hàng, lịch chạy trong phiên CTO, phiên cũ chỉ xem |
 | [12-durable-work](docs/architecture/12-durable-work.md) | Việc không phụ thuộc trình duyệt; inbox/việc được giao lưu DB, server lên lại tự làm tiếp |
+| [13-telegram](docs/architecture/13-telegram.md) | CEO chat với CTO qua bot Telegram (long polling, ghép nối bằng mã) |
+| [14-uploads](docs/architecture/14-uploads.md) | File gửi kèm: PDF/Excel/Word thành tài liệu `uploads/`, ảnh gửi thẳng cho model |
