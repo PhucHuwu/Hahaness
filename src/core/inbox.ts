@@ -1,6 +1,12 @@
 import type { InboxItem, Message } from "./types.ts"
 import { id } from "./id.ts"
 
+/** Ghi lại thay đổi của inbox (harness lưu xuống store để restart không mất tin chưa xử lý). */
+export interface InboxLog {
+  added(item: InboxItem, front: boolean): void
+  taken(ids: string[]): void
+}
+
 /**
  * Hàng đợi input cho một session. `steer` được promote giữa các step của turn
  * đang chạy; `queue` chỉ được lấy khi bắt đầu turn mới.
@@ -9,9 +15,12 @@ export class Inbox {
   private items: InboxItem[] = []
   private waiters: Array<() => void> = []
 
+  constructor(private log?: InboxLog) {}
+
   push(delivery: InboxItem["delivery"], message: Message): InboxItem {
     const item = { id: id("inb"), delivery, message }
     this.items.push(item)
+    this.log?.added(item, false)
     this.waiters.splice(0).forEach((w) => w())
     return item
   }
@@ -20,20 +29,31 @@ export class Inbox {
   pushFront(delivery: InboxItem["delivery"], message: Message): InboxItem {
     const item = { id: id("inb"), delivery, message }
     this.items.unshift(item)
+    this.log?.added(item, true)
     this.waiters.splice(0).forEach((w) => w())
     return item
+  }
+
+  /** Nạp lại item đã lưu (sau restart); không ghi lại lần nữa. */
+  restore(items: InboxItem[]) {
+    this.items.push(...items)
   }
 
   /** Lấy mọi steer đang chờ (dùng giữa step). */
   drainSteer(): InboxItem[] {
     const out = this.items.filter((i) => i.delivery === "steer")
     this.items = this.items.filter((i) => i.delivery !== "steer")
-    return out
+    return this.took(out)
   }
 
   /** Lấy mọi item đang chờ (dùng ở đầu turn). */
   drainAll(): InboxItem[] {
-    return this.items.splice(0)
+    return this.took(this.items.splice(0))
+  }
+
+  private took(out: InboxItem[]) {
+    if (out.length) this.log?.taken(out.map((i) => i.id))
+    return out
   }
 
   /** Xem mà không lấy ra (UI hiện báo cáo còn chờ trong inbox). */

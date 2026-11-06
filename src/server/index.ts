@@ -21,16 +21,19 @@ export interface ServerOptions {
   uiDir?: string
   /** false → không tự chạy việc định kỳ (test). */
   scheduler?: boolean
+  /** false → không tự làm tiếp việc dở lúc khởi động (test). */
+  recover?: boolean
 }
 
 /**
- * Pending questions: tool `question` (và permission ask) chờ CEO trả lời qua UI.
- * Hiển thị trong chat của phiên tương ứng; trả lời qua POST /api/questions/:id.
+ * Permission ask đang chờ CEO trả lời qua UI (chỉ trong bộ nhớ: restart thì lượt đang hỏi bị cắt
+ * và `recover` chạy lại). Tool `question` không đi qua đây: nó kết thúc lượt, câu hỏi nằm trong
+ * lịch sử chat (xem `docs/architecture/12-durable-work.md`).
  */
 interface Pending {
   id: string
   sessionID: string
-  kind: "question" | "permission"
+  kind: "permission"
   text: string
   options?: string[]
   resolve: (answer: string) => void
@@ -47,15 +50,12 @@ export async function startServer(opts: ServerOptions) {
       bus.emit({ type: "question", id: q.id, sessionID, kind, text, options })
     })
 
-  // Tool `question` không nhận sessionID qua handler; theo dõi phiên đang gọi tool question.
-  let askingSession = ""
-
   const app = await bootstrap({
     cwd: opts.cwd,
     dbPath: opts.dbPath,
     scheduler: opts.scheduler,
+    recover: opts.recover,
     onScheduleChange: (scheduleID) => bus.emit({ type: "schedule", id: scheduleID }),
-    questionHandler: (q, options) => ask(askingSession, "question", q, options),
     askHandler: async (req) => {
       const a = await ask(req.sessionID, "permission", `${req.agent} wants to ${req.action} ${req.resource}`, ["Allow", "Deny"])
       return a.toLowerCase().startsWith("d") ? { kind: "reject" } : { kind: "always" }
@@ -63,10 +63,7 @@ export async function startServer(opts: ServerOptions) {
     events: {
       onText: (sessionID, delta) => bus.emit({ type: "text", sessionID, delta }),
       onReasoning: (sessionID, delta) => bus.emit({ type: "reasoning", sessionID, delta }),
-      onToolStart: (sessionID, name, args, callID) => {
-        if (name === "question") askingSession = sessionID
-        bus.emit({ type: "tool-start", sessionID, name, args, callID })
-      },
+      onToolStart: (sessionID, name, args, callID) => bus.emit({ type: "tool-start", sessionID, name, args, callID }),
       onToolEnd: (sessionID, name, output, isError, callID) => bus.emit({ type: "tool-end", sessionID, name, output: output.slice(0, 4000), isError, callID }),
       onNotice: (sessionID, text) => bus.emit({ type: "notice", sessionID, text }),
       onUsage: (sessionID, usage) => bus.emit({ type: "usage", sessionID, usage }),

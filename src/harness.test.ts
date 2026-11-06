@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
-import { Harness } from "./harness.ts"
+import { Harness, RESUMED_AFTER_CRASH } from "./harness.ts"
 import { AgentRegistry } from "./agent/registry.ts"
 import { ToolRegistry } from "./tool/registry.ts"
 import { define } from "./tool/define.ts"
@@ -28,6 +28,7 @@ import { fitForSummary, isOverflow, prune } from "./context/compaction.ts"
 import type { Message } from "./core/types.ts"
 import { updateNotice } from "./context/instructions.ts"
 import { askLead } from "./tool/builtin/ask-lead.ts"
+import { question } from "./tool/builtin/question.ts"
 import { AnthropicProvider, requestBody, toAnthropicMessages } from "./provider/anthropic.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -192,7 +193,9 @@ test("loop: tool call then completion, persisted before execute", async () => {
     const outcome = await harness.send(main.session.id, "say hi")
     assert.equal(outcome.tag, "completed")
     assert.equal(provider.requests.length, 2)
-    const kinds = (await harness.store.read(main.session.id)).map((e) => e.kind)
+    const all = (await harness.store.read(main.session.id)).map((e) => e.kind)
+    assert.deepEqual(all.slice(0, 4), ["session", "inbox", "claim", "inbox-taken"], "the CEO message is stored before the turn takes it")
+    const kinds = all.filter((k) => !k.startsWith("inbox"))
     assert.deepEqual(kinds.slice(0, 4), ["session", "claim", "message", "message"])
     assert.equal(kinds.at(-1), "release")
   } finally {
@@ -1250,6 +1253,107 @@ test("hired writer saves under drafts/, deliverables/ is refused and reported as
     assert.equal((await harness.send(main.session.id, "make a plan")).tag, "completed")
     assert.equal(docs.get("drafts/plan.md")?.content, "the plan")
     assert.equal(docs.get("deliverables/plan.md"), undefined)
+  } finally {
+    await cleanup()
+  }
+})
+
+// ---- Việc bền qua restart ------------------------------------------------------
+
+test("durable work: server dies mid-task with another task queued → recover finishes both and reports reach the CTO", async () => {
+  let crashed = false
+  const provider: ProviderClient = {
+    info: () => ({ id: "mock", contextWindow: 100_000, maxOutput: 8_000 }),
+    async *stream(req) {
+      const lastUser = [...req.messages].reverse().find((m) => m.role === "user" && m.source !== "system")!
+      const text = lastUser.parts.map((p) => (p.type === "text" ? p.text : "")).join("")
+      if (text.includes("<goal>first</goal>")) {
+        // Lần đầu: treo như server bị tắt giữa lượt.
+        if (!crashed) await new Promise(() => {})
+        yield { type: "text-delta", text: "first done" }
+      } else if (text.includes("<goal>second</goal>")) yield { type: "text-delta", text: "second done" }
+      else yield { type: "text-delta", text: "ok" }
+      yield finish()
+    },
+  }
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const cto = await harness.sessionFor("cto")
+    await harness.spawn(cto.session.id, { agent: "researcher", brief: { goal: "first", context: "c", done_when: "d" }, background: true })
+    await harness.spawn(cto.session.id, { agent: "researcher", brief: { goal: "second", context: "c", done_when: "d" }, background: true })
+    await new Promise((r) => setTimeout(r, 20))
+
+    // "Restart": harness mới trên cùng DB, không ai mở web.
+    crashed = true
+    const after = new Harness(harness.cfg)
+    assert.equal(await after.recover(), 1, "the cut-off employee turn is resumed")
+    const main = await after.sessionFor("cto")
+    let reports: string[] = []
+    for (let i = 0; i < 300; i++) {
+      reports = main.messages.filter((m) => m.source === "subagent").map((m) => m.parts.map((p) => (p.type === "text" ? p.text : "")).join(""))
+      if (reports.length >= 2 && !main.running) break
+      await new Promise((r) => setTimeout(r, 10))
+    }
+    assert.equal(reports.length, 2)
+    assert.match(reports[0]!, /first done/)
+    assert.match(reports[1]!, /second done/)
+    const worker = after.list().find((l) => l.agent.id === "researcher")!
+    assert.equal(after.work(worker).status, "idle")
+    assert.ok(worker.messages.some((m) => m.parts.some((p) => p.type === "text" && p.text === RESUMED_AFTER_CRASH)), "the employee is told it was cut off")
+
+    // Lần khởi động sau: không còn gì dở → không chạy gì.
+    assert.equal(await new Harness(harness.cfg).recover(), 0)
+  } finally {
+    await cleanup()
+  }
+})
+
+test("durable work: reports waiting in an idle CTO inbox survive a restart without waking anyone", async () => {
+  const provider = scripted([])
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const cto = await harness.sessionFor("cto")
+    await harness.spawn(cto.session.id, { agent: "researcher", brief: { goal: "g", context: "c", done_when: "d" }, background: true, wakeLead: false })
+    for (let i = 0; i < 200 && cto.inbox.size === 0; i++) await new Promise((r) => setTimeout(r, 10))
+    assert.equal(cto.inbox.size, 1)
+    const after = new Harness(harness.cfg)
+    assert.equal(await after.recover(), 0)
+    const again = await after.sessionFor("cto")
+    assert.equal(again.inbox.size, 1, "the unread report is still there")
+    assert.ok(!again.running)
+    const calls = provider.requests.length
+    await after.send(again.session.id, "any news?")
+    assert.equal(provider.requests.length, calls + 1)
+    assert.ok(again.messages.some((m) => m.source === "subagent"), "report delivered with the next message")
+    assert.equal((await harness.store.load(again.session.id))!.inbox.length, 0, "taken items are recorded")
+  } finally {
+    await cleanup()
+  }
+})
+
+test("question: ends the CTO turn without waiting; the CEO's later message is the answer", async () => {
+  const provider = scripted([
+    () => [{ type: "tool-call", callID: "q1", name: "question", args: { question: "Which market?", options: ["VN", "US"] } }, finish("tool-calls")],
+    (req) => {
+      const last = req.messages.at(-1)!
+      assert.equal(last.role, "user")
+      assert.match(last.parts.map((p) => (p.type === "text" ? p.text : "")).join(""), /VN/)
+      return [{ type: "text-delta", text: "going with VN" }, finish()]
+    },
+  ])
+  const { harness, tools, cleanup } = await setup(provider)
+  tools.register(question)
+  try {
+    const main = await harness.sessionFor("cto")
+    const first = await harness.send(main.session.id, "launch a product")
+    assert.equal(first.tag, "completed")
+    assert.equal(provider.requests.length, 1, "no model call after the question")
+    assert.ok(!main.running)
+    // CEO trả lời sau đó (có thể sau restart).
+    const after = new Harness(harness.cfg)
+    const again = await after.sessionFor("cto")
+    await after.send(again.session.id, "VN")
+    assert.equal(provider.requests.length, 2)
   } finally {
     await cleanup()
   }

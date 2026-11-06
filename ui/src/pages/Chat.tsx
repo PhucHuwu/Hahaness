@@ -216,6 +216,17 @@ function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: 
 
   const stop = () => api.post(`/api/sessions/${sessionID}/stop`).catch((e) => setSendError((e as Error).message))
   const answer = (q: Question, a: string) => api.post(`/api/questions/${q.id}`, { answer: a }).catch((e) => setSendError((e as Error).message))
+  // Câu hỏi của CTO (tool `question`) nằm trong lịch sử chat; trả lời = gửi tin nhắn.
+  const asked = state.running ? undefined : openQuestion(state.messages)
+  const reply = async (a: string) => {
+    setSendError(undefined)
+    try {
+      await api.post(`/api/sessions/${sessionID}/messages`, { text: a })
+      setState((s) => ({ ...s, messages: [...s.messages, userMessage(a)], error: undefined }))
+    } catch (e) {
+      setSendError((e as Error).message)
+    }
+  }
 
   const agentName = (id: string) => (id === "ceo" ? "Bạn" : (staff.find((s) => s.id === id)?.name ?? id))
 
@@ -249,6 +260,13 @@ function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: 
         {state.messages.map((m) => (
           <MessageView key={m.id} m={m} agentName={agentName} />
         ))}
+        {asked && detail.home && (
+          <div className="question">
+            <div className="small muted">{myName} hỏi bạn</div>
+            <div>{asked.question}</div>
+            <QuestionReply q={{ id: "", sessionID, kind: "question", text: asked.question, options: asked.options }} onAnswer={reply} />
+          </div>
+        )}
         {questions.map((q) => (
           <div key={q.id} className="question">
             <div className="small muted">{q.kind === "permission" ? "Cần cho phép" : `${myName} hỏi bạn`}</div>
@@ -299,6 +317,25 @@ function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: 
       )}
     </div>
   )
+}
+
+/** Lượt cuối của agent kết thúc bằng `question` và CEO chưa nhắn gì sau đó → câu hỏi còn chờ. */
+function openQuestion(messages: Message[]): { question: string; options?: string[] } | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!
+    if (m.role === "user" && (m.source === "user" || m.source === undefined)) return undefined
+    if (m.role !== "assistant") continue
+    const done = new Set(m.parts.flatMap((p) => (p.type === "tool-result" && !p.isError ? [p.callID] : [])))
+    for (let j = m.parts.length - 1; j >= 0; j--) {
+      const p = m.parts[j]!
+      if (p.type === "tool-call" && p.name === "question" && done.has(p.callID)) {
+        const a = (p.args ?? {}) as { question?: string; options?: string[] }
+        return a.question ? { question: a.question, options: a.options } : undefined
+      }
+    }
+    return undefined
+  }
+  return undefined
 }
 
 function QuestionReply({ q, onAnswer }: { q: Question; onAnswer: (a: string) => void }) {

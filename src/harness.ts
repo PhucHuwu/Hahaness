@@ -82,10 +82,11 @@ interface Live {
 }
 
 /**
- * Một lần giao việc vào phiên duy nhất của nhân viên. Không lưu xuống DB: restart thì chỉ
- * khôi phục trường hợp nhân viên đang chờ câu trả lời (`ask_lead`), xem `resume`.
+ * Một lần giao việc vào phiên duy nhất của nhân viên. Lưu xuống store của phiên nhân viên
+ * (`assign`/`assign-state`/`assign-end`) để restart vẫn làm tiếp và vẫn báo cáo về người giao.
  */
 interface Assignment {
+  id: string
   /** Agent nhận báo cáo; báo cáo vào phiên duy nhất của agent đó. */
   lead: string
   /** Người giao hiển thị trên UI: id agent, `ceo` hoặc `scheduler`. */
@@ -164,22 +165,67 @@ export class Harness {
     live.compaction = state.compactions.at(-1)
     // System vừa dựng lại từ workspace hiện tại → không cần báo gì cho tới khi tài liệu đổi tiếp.
     live.knownCheckpoint = live.compaction?.id
-    // Nhân viên đang chờ câu trả lời lúc restart: trả lời xong vẫn phải báo lại người giao việc.
-    if (agent.mode !== "primary" && pendingQuestion(live.messages) !== undefined) {
+    live.inbox.restore(state.inbox)
+    // Việc được giao chưa xong: kết quả đầu tiên không còn ai chờ trong tool call → mọi báo cáo vào inbox người giao.
+    for (const r of state.assignments) {
+      const task: Assignment = { id: r.id, lead: r.lead, from: r.from, wakeLead: r.wakeLead, brief: r.brief, depth: r.depth, waiting: r.waiting, reported: true, resolve: () => {} }
+      if (r.started && !live.task) {
+        live.task = task
+        // Tắt ngay giữa lúc đánh dấu bắt đầu và đưa brief vào inbox → đưa lại.
+        if (!live.messages.some((m) => m.id === r.brief.id) && !state.inbox.some((i) => i.message.id === r.brief.id)) live.inbox.push("queue", r.brief)
+      } else live.tasks.push(task)
+    }
+    // DB cũ (trước khi lưu việc được giao): nhân viên đang chờ câu trả lời thì vẫn phải báo lại người giao việc.
+    if (!live.task && agent.mode !== "primary" && pendingQuestion(live.messages) !== undefined) {
       const brief = [...live.messages].reverse().find((m) => m.role === "user" && m.source === "agent" && !!m.from)
       const from = brief?.from
       if (brief && from) {
         const lead = this.cfg.agents.has(from) ? from : (this.cfg.agents.list("primary")[0]?.id ?? "cto")
-        live.task = { lead, from, wakeLead: true, brief, depth: 1, waiting: true, reported: true, resolve: () => {} }
+        live.task = { id: id("task"), lead, from, wakeLead: true, brief, depth: 1, waiting: true, reported: true, resolve: () => {} }
       }
     }
     const repaired = await repairDangling({ sessionID, messages: live.messages, store: this.store })
     live.estimate.estimated += fromCheckpoint(live.messages, live.compaction).reduce((n, m) => n + estimateMessage(m), 0)
-    if (state.staleClaim || repaired > 0) {
-      // Không tự chạy tiếp (tốn tiền, CEO có thể không muốn); báo cho model ở lượt kế tiếp.
+    const told = state.inbox.some((i) => i.message.parts.some((p) => p.type === "text" && p.text === RESUMED_AFTER_CRASH))
+    if ((state.staleClaim || repaired > 0) && !told) {
+      // Báo cho model ở lượt kế tiếp; `recover` lúc khởi động sẽ chạy lượt đó luôn.
       live.inbox.push("queue", { id: id("msg"), role: "user", source: "system", createdAt: Date.now(), parts: [{ type: "text", text: RESUMED_AFTER_CRASH }] })
     }
     return live
+  }
+
+  /**
+   * Gọi lúc server khởi động: làm tiếp việc dở từ trước khi tắt (deploy, reboot, crash),
+   * không cần ai mở web. Đánh thức phiên có lượt bị cắt (claim chưa release) hoặc việc được
+   * giao còn input chưa xử lý (brief, câu trả lời); chạy việc đang xếp hàng. Tin trong inbox của phiên
+   * rảnh (vd báo cáo `wakeLead: false`) vẫn chờ tin nhắn kế tiếp như trước restart.
+   * Gọi lại nhiều lần an toàn (vd sau khi sửa cấu hình provider). Trả số phiên được chạy tiếp.
+   */
+  async recover(): Promise<number> {
+    let woken = 0
+    for (const s of homeSessions(await this.store.listSessions()).values()) {
+      if (!this.cfg.agents.has(s.agent)) continue
+      const known = this.live.get(s.id)
+      if (known?.running) continue
+      const state = known ? undefined : await this.store.load(s.id)
+      if (state && !state.staleClaim && state.inbox.length === 0 && state.assignments.length === 0) continue
+      const live = await this.sessionFor(s.agent)
+      if (live.session.id !== s.id || live.running) continue
+      const task = live.task
+      // Việc đang chờ câu trả lời mà câu trả lời đã nằm trong inbox → cũng chạy tiếp.
+      if (state?.staleClaim || (task && live.inbox.size > 0)) {
+        woken++
+        void this.wake(live)
+      } else if (task && !task.waiting) {
+        // Lượt đã xong nhưng tắt trước khi kịp báo cáo.
+        this.settle(live, { tag: "completed", text: "" })
+        this.next(live)
+      } else if (!task && live.tasks.length > 0) {
+        woken++
+        this.next(live)
+      }
+    }
+    return woken
   }
 
   private async activate(session: Session, agent: AgentDef): Promise<Live> {
@@ -188,7 +234,10 @@ export class Harness {
     const live: Live = {
       session,
       agent,
-      inbox: new Inbox(),
+      inbox: new Inbox({
+        added: (item, front) => void this.store.append(session.id, { kind: "inbox", item, ...(front ? { front } : {}) }),
+        taken: (ids) => void this.store.append(session.id, { kind: "inbox-taken", ids }),
+      }),
       messages: [],
       estimate: { measured: 0, estimated: 0 },
       usage: [],
@@ -533,7 +582,8 @@ export class Harness {
     }
     let resolve!: (e: ResultEntry) => void
     const first = new Promise<ResultEntry>((r) => (resolve = r))
-    const task: Assignment = { lead: lead.agent.id, from, wakeLead: opts.wakeLead !== false, brief, depth, resolve }
+    const task: Assignment = { id: id("task"), lead: lead.agent.id, from, wakeLead: opts.wakeLead !== false, brief, depth, resolve }
+    await this.store.append(worker.session.id, { kind: "assign", task: { id: task.id, lead: task.lead, from, wakeLead: task.wakeLead, brief, depth } })
     this.activeSubagents++
 
     // Foreground: người giao đang chờ trong tool call → họ dừng (hoặc tool timeout) thì dừng luôn việc này.
@@ -543,11 +593,13 @@ export class Harness {
       if (worker.task === task) worker.abort.abort("lead stopped")
       else if (worker.tasks.includes(task)) {
         worker.tasks = worker.tasks.filter((t) => t !== task)
+        this.closeTask(worker, task)
         this.deliver(task, { ...emptyResult(worker), status: "stopped", exitReason: "cancelled before it started" })
       }
     }
     if (link?.aborted) {
       this.activeSubagents--
+      this.closeTask(worker, task)
       throw new Error("delegate: cancelled")
     }
     link?.addEventListener("abort", cancel, { once: true })
@@ -580,8 +632,13 @@ export class Harness {
 
   private begin(live: Live, task: Assignment) {
     live.task = task
+    void this.store.append(live.session.id, { kind: "assign-state", id: task.id, started: true })
     live.inbox.push("queue", task.brief)
     void this.wake(live)
+  }
+
+  private closeTask(live: Live, task: Assignment) {
+    void this.store.append(live.session.id, { kind: "assign-end", id: task.id })
   }
 
   /** Lượt vừa xong mà inbox rỗng: chạy việc kế tiếp trong hàng (nếu đã xong việc hiện tại). */
@@ -599,7 +656,10 @@ export class Harness {
     if (!task) return
     const entry = this.result(live, task, outcome)
     task.waiting = entry.status === "needs_input"
-    if (!task.waiting) live.task = undefined
+    if (!task.waiting) {
+      live.task = undefined
+      this.closeTask(live, task)
+    } else void this.store.append(live.session.id, { kind: "assign-state", id: task.id, waiting: true })
     this.deliver(task, entry)
   }
 

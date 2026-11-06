@@ -98,9 +98,12 @@ export class Scheduler {
     return this
   }
 
-  /** Lần chạy dở từ trước khi tắt app → interrupted; rồi kiểm tra mỗi 30s (bù luôn lịch đã lỡ). */
+  /**
+   * Lần chạy dở từ trước khi tắt app → interrupted (không theo dõi tiếp được), nhưng phần việc vẫn
+   * được `Harness.recover` làm tiếp và báo cáo vẫn về CTO. Rồi kiểm tra mỗi 30s (bù luôn lịch đã lỡ).
+   */
   start() {
-    for (const run of this.runs()) if (run.status === "running") this.saveRun({ ...run, status: "interrupted", finishedAt: this.now(), error: "the app stopped during this run" })
+    for (const run of this.runs()) if (run.status === "running") this.saveRun({ ...run, status: "interrupted", finishedAt: this.now(), error: "the app restarted during this run; the unfinished work continues on its own" })
     for (const s of this.list()) if (s.lastStatus === "running") this.save({ ...s, lastStatus: "interrupted" })
     void this.tick()
     this.timer = setInterval(() => void this.tick(), TICK_MS)

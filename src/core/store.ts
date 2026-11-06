@@ -1,5 +1,5 @@
 import type { Db } from "./db.ts"
-import type { Compaction, Message, Part, Session, StoreEvent, UsageRecord } from "./types.ts"
+import type { AssignmentRecord, Compaction, InboxItem, Message, Part, Session, StoreEvent, UsageRecord } from "./types.ts"
 
 /**
  * Event log append-only trong SQLite (bảng `events`), một dòng mỗi event.
@@ -83,6 +83,10 @@ export interface SessionState {
   usage: UsageRecord[]
   /** true nếu có claim chưa release → turn trước bị cắt giữa chừng. */
   staleClaim: boolean
+  /** Inbox chưa xử lý lúc dừng, đúng thứ tự. */
+  inbox: InboxItem[]
+  /** Việc được giao chưa xong (đang làm trước, rồi hàng chờ). */
+  assignments: AssignmentRecord[]
 }
 
 export function fold(events: StoreEvent[]): SessionState {
@@ -91,6 +95,8 @@ export function fold(events: StoreEvent[]): SessionState {
   const compactions: Compaction[] = []
   const usage: UsageRecord[] = []
   let claimed = false
+  let inbox: InboxItem[] = []
+  const assignments = new Map<string, AssignmentRecord>()
   for (const e of events) {
     switch (e.kind) {
       case "session":
@@ -114,8 +120,37 @@ export function fold(events: StoreEvent[]): SessionState {
       case "release":
         claimed = false
         break
+      case "inbox":
+        if (e.front) inbox.unshift(e.item)
+        else inbox.push(e.item)
+        break
+      case "inbox-taken": {
+        const ids = new Set(e.ids)
+        inbox = inbox.filter((i) => !ids.has(i.id))
+        break
+      }
+      case "assign":
+        assignments.set(e.task.id, { ...e.task })
+        break
+      case "assign-state": {
+        const t = assignments.get(e.id)
+        if (t) assignments.set(e.id, { ...t, ...(e.started !== undefined ? { started: e.started } : {}), ...(e.waiting !== undefined ? { waiting: e.waiting } : {}) })
+        break
+      }
+      case "assign-end":
+        assignments.delete(e.id)
+        break
     }
   }
   if (!session) throw new Error("store: missing session event")
-  return { session, messages: [...messages.values()], compactions, usage, staleClaim: claimed }
+  const open = [...assignments.values()]
+  return {
+    session,
+    messages: [...messages.values()],
+    compactions,
+    usage,
+    staleClaim: claimed,
+    inbox,
+    assignments: [...open.filter((t) => t.started), ...open.filter((t) => !t.started)],
+  }
 }

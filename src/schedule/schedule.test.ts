@@ -50,7 +50,7 @@ async function setup(provider: ProviderClient, opts: { extraTools?: string[] } =
   const tools = new ToolRegistry()
   let now = at(2026, 11, 6, 10, 0)
   const scheduler = new Scheduler({ db, agents, tools, now: () => now })
-  tools.register(delegate(agents), knowledgeTool(docs), scheduleTool(scheduler), question(async () => "never asked"))
+  tools.register(delegate(agents), knowledgeTool(docs), scheduleTool(scheduler), question)
   for (const name of opts.extraTools ?? []) tools.register(define({ name, description: name, input: z.object({}), async execute() { return { output: "ok" } } }))
   const harness = new Harness({
     cwd: dir,

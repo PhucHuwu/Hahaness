@@ -71,3 +71,21 @@ export type StoreEvent =
   | { kind: "usage"; usage: UsageRecord }
   | { kind: "claim"; at: number }
   | { kind: "release"; at: number }
+  /** Inbox lưu xuống DB để server restart không mất tin nhắn/báo cáo chưa xử lý. */
+  | { kind: "inbox"; item: InboxItem; front?: boolean }
+  | { kind: "inbox-taken"; ids: string[] }
+  /** Việc được giao cho agent của phiên này (hàng chờ + việc đang làm), xem harness `Assignment`. */
+  | { kind: "assign"; task: AssignmentRecord }
+  | { kind: "assign-state"; id: string; started?: boolean; waiting?: boolean }
+  | { kind: "assign-end"; id: string }
+
+export interface AssignmentRecord {
+  id: string
+  lead: string
+  from: string
+  wakeLead: boolean
+  brief: Message
+  depth: number
+  started?: boolean
+  waiting?: boolean
+}

@@ -14,7 +14,7 @@ import { documentTools } from "./tool/builtin/fs.ts"
 import { webfetch, websearch } from "./tool/builtin/web.ts"
 import { todo } from "./tool/builtin/todo.ts"
 import { memory } from "./tool/builtin/memory.ts"
-import { question, type QuestionHandler } from "./tool/builtin/question.ts"
+import { question } from "./tool/builtin/question.ts"
 import { delegate } from "./tool/builtin/delegate.ts"
 import { askLead } from "./tool/builtin/ask-lead.ts"
 import { hire } from "./tool/builtin/hire.ts"
@@ -49,12 +49,13 @@ export interface BootstrapOptions {
   dbPath?: string
   events: LoopEvents
   askHandler: AskHandler
-  questionHandler: QuestionHandler
   /** false → không kết nối MCP lúc khởi động (test). */
   mcp?: boolean
   /** false → không tự chạy việc định kỳ (CRUD vẫn dùng được). */
   scheduler?: boolean
   onScheduleChange?: (scheduleID: string) => void
+  /** false → không tự làm tiếp việc dở lúc khởi động (test). */
+  recover?: boolean
 }
 
 export function defaultDbPath(cwd: string) {
@@ -89,7 +90,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
     websearch,
     todo,
     memory(docs),
-    question(opts.questionHandler),
+    question,
     delegate(agents),
     askLead,
     hire(agents),
@@ -127,5 +128,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
   }
   const app: App = { cwd, db, docs, config, providerError, agents, tools, skills, mcp, harness, scheduler, close }
   if (opts.scheduler !== false) scheduler.start()
+  // Làm tiếp việc dở từ trước khi tắt (không chờ ai mở web). Chưa cấu hình provider thì lượt sẽ lỗi → để sau.
+  if (opts.recover !== false && !providerError) void harness.recover().catch((e) => console.error("recover:", (e as Error).message))
   return app
 }
