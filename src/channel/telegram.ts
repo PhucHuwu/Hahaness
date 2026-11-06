@@ -201,7 +201,7 @@ export class TelegramChannel {
     if (file) {
       if ((file.size ?? 0) > TG_MAX_DOWNLOAD) return this.send(chat.id, "Telegram chỉ cho bot tải file tối đa 20 MB. File lớn hơn thì gửi qua web.")
       try {
-        parts = await attach(harness.cfg.docs, [{ name: file.name, mime: file.mime, data: await this.download(s.token, file.id) }])
+        parts = await attach(harness.cfg.docs, [{ name: file.name, mime: file.mime, data: await this.download(s.token, file.id) }], "ceo", harness.cfg.workdir)
       } catch (e) {
         return this.send(chat.id, e instanceof UploadError ? e.message : `Không tải được file: ${(e as Error).message}`)
       }

@@ -8,6 +8,7 @@ import { Router, SseBus, json, serveStatic, HttpError } from "./http.ts"
 import { chatRoutes, sessionView } from "./routes-chat.ts"
 import { adminRoutes } from "./routes-admin.ts"
 import { scheduleRoutes } from "./routes-schedule.ts"
+import { Auth, AuthError, MIN_PASSWORD, sameOrigin } from "./auth.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -25,6 +26,8 @@ export interface ServerOptions {
   recover?: boolean
   /** false → không kết nối Telegram (test). */
   channels?: boolean
+  /** false → không cần đăng nhập (test). Mặc định bật. */
+  auth?: boolean
 }
 
 /**
@@ -76,7 +79,41 @@ export async function startServer(opts: ServerOptions) {
     },
   })
 
+  const auth = new Auth(app.db)
+  const authOn = opts.auth !== false
   const router = new Router()
+  const wrap = (fn: () => unknown) => {
+    try {
+      return fn()
+    } catch (e) {
+      if (e instanceof AuthError) throw new HttpError(e.status, e.message)
+      throw e
+    }
+  }
+  router.get("/api/auth", (req) => ({ ...auth.status(req.raw), required: authOn, minPassword: MIN_PASSWORD }))
+  router.post("/api/auth/setup", async (req, res) => {
+    const b = await req.json<{ password?: string; code?: string }>()
+    wrap(() => auth.setup(req.raw, res, b.password ?? "", b.code ?? ""))
+    return { ok: true }
+  })
+  router.post("/api/auth/login", async (req, res) => {
+    const b = await req.json<{ password?: string }>()
+    wrap(() => auth.login(req.raw, res, b.password ?? ""))
+    return { ok: true }
+  })
+  router.post("/api/auth/logout", (req, res) => {
+    auth.logout(req.raw, res)
+    return { ok: true }
+  })
+  router.post("/api/auth/password", async (req) => {
+    const b = await req.json<{ current?: string; next?: string }>()
+    wrap(() => auth.changePassword(req.raw, b.current ?? "", b.next ?? ""))
+    return { ok: true }
+  })
+  router.post("/api/auth/logout-others", (req) => {
+    auth.logoutOthers(req.raw)
+    return { ok: true, sessions: auth.sessionCount() }
+  })
   router.get("/api/health", () => ({ ok: true, db: app.db.path, providerError: app.providerError ?? null, clients: bus.size }))
   router.get("/api/events", (_req, res) => {
     bus.subscribe(res)
@@ -100,8 +137,15 @@ export async function startServer(opts: ServerOptions) {
   const hasUI = existsSync(join(uiDir, "index.html"))
 
   const server = createServer(async (req, res) => {
-    if (await router.handle(req, res)) return
     const url = new URL(req.url ?? "/", "http://localhost")
+    if (url.pathname.startsWith("/api/")) {
+      // Request ghi từ trang khác (CSRF) bị chặn kể cả khi đã đăng nhập.
+      if (req.method !== "GET" && !sameOrigin(req)) return json(res, 403, { error: "cross-origin request blocked" })
+      if (authOn && !url.pathname.startsWith("/api/auth") && !auth.session(req)) {
+        return json(res, 401, { error: auth.configured() ? "Cần đăng nhập." : "Chưa đặt mật khẩu." })
+      }
+    }
+    if (await router.handle(req, res)) return
     if (url.pathname.startsWith("/api/")) return json(res, 404, { error: `no route ${req.method} ${url.pathname}` })
     if (hasUI && (await serveStatic(uiDir, url, res))) return
     json(res, 404, { error: hasUI ? "not found" : "UI not built. Run `npm run ui:build`, or `npm run ui` for the dev server." })
@@ -119,12 +163,19 @@ export async function startServer(opts: ServerOptions) {
         resolve()
       })
     })
-  return { app, server, url: `http://${host}:${port}`, hasUI, close }
+  return { app, server, auth, url: `http://${host}:${port}`, hasUI, close }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const { url, hasUI, app } = await startServer({ cwd: process.cwd(), port: Number(process.env.PORT ?? 7331) })
+  const { url, hasUI, app, auth } = await startServer({ cwd: process.cwd(), port: Number(process.env.PORT ?? 7331), host: process.env.HOST })
   console.log(`Hahaness server: ${url}${hasUI ? "" : "  (API only — run \`npm run ui\` for the interface)"}`)
   console.log(`Company data: ${app.db.path}`)
+  logSetup(auth)
   if (app.providerError) console.log(`Provider: ${app.providerError} — configure in Settings.`)
+}
+
+/** Chưa có mật khẩu → in mã cài đặt (chỉ ai xem được log server mới đặt được mật khẩu). */
+export function logSetup(auth: Auth) {
+  if (auth.configured()) return
+  console.log(`\nChưa có mật khẩu. Mở trang web và đặt mật khẩu với Mã cài đặt: ${auth.setupCode}\n`)
 }

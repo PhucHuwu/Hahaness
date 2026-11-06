@@ -191,7 +191,7 @@ function FileEditor({ path, hint, subtree = 0, deletable, onSaved, onDeleted }: 
   return <Editor title={path.replace(/\.md$/, "")} hint={hint} initial={initial} onSave={save} onDelete={deletable ? remove : undefined} />
 }
 
-const CAPS = ["read", "write", "webfetch", "websearch"] as const
+const CAPS = ["read", "write", "webfetch", "websearch", "bash"] as const
 
 function StaffEditor({ id, staff, onChanged }: { id: string; staff: Staff[]; onChanged: (id?: string) => void }) {
   const def = staff.find((s) => s.id === id)
@@ -244,7 +244,7 @@ function StaffEditor({ id, staff, onChanged }: { id: string; staff: Staff[]; onC
               {c}
             </label>
           ))}
-          <span className="small muted">(write chỉ được ghi vào drafts/)</span>
+          <span className="small muted">(write chỉ được ghi vào drafts/; bash = chạy lệnh/code để tính toán, xử lý file)</span>
         </div>
         <label className="field grow">
           Mô tả công việc (system prompt)

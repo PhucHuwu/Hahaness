@@ -1,3 +1,5 @@
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import type { DocumentStore } from "../context/documents.ts"
 import type { Part } from "../core/types.ts"
 import { extract, kindOf } from "./extract.ts"
@@ -23,7 +25,11 @@ const PREVIEW_CHARS = 2_000
 
 export class UploadError extends Error {}
 
-export async function attach(docs: DocumentStore, files: UploadFile[], author = "ceo"): Promise<Part[]> {
+/**
+ * `workdir`: thư mục của tool `bash`. Bản gốc mọi file (cả ảnh) được lưu ở `<workdir>/uploads/<tên>`
+ * để code (Python…) đọc trực tiếp, vd tính toán trên file Excel.
+ */
+export async function attach(docs: DocumentStore, files: UploadFile[], author = "ceo", workdir?: string): Promise<Part[]> {
   const images: Part[] = []
   const entries: string[] = []
   for (const f of files) {
@@ -31,10 +37,12 @@ export async function attach(docs: DocumentStore, files: UploadFile[], author = 
     const kind = kindOf(name, f.mime)
     if (!kind) throw new UploadError(`Chưa đọc được loại file "${name}". Hỗ trợ: PDF, Excel (.xlsx), Word (.docx), CSV/TXT, ảnh PNG/JPG/WEBP/GIF.`)
     if (f.data.length > MAX_FILE_BYTES) throw new UploadError(`File "${name}" lớn hơn 20 MB.`)
+    const original = workdir ? saveOriginal(workdir, name, f.data) : undefined
+    const at = original ? ` original="${attrEscape(original)}"` : ""
     if (kind === "image") {
       if (f.data.length > MAX_IMAGE_BYTES) throw new UploadError(`Ảnh "${name}" lớn hơn 5 MB.`)
       images.push({ type: "image", mime: imageMime(name, f.mime), data: f.data.toString("base64") })
-      entries.push(`<file name="${attrEscape(name)}" kind="image">(image attached below)</file>`)
+      entries.push(`<file name="${attrEscape(name)}" kind="image"${at}>(image attached below)</file>`)
       continue
     }
     let out
@@ -50,10 +58,21 @@ export async function attach(docs: DocumentStore, files: UploadFile[], author = 
       out.text.length <= INLINE_CHARS
         ? out.text
         : `${out.text.slice(0, PREVIEW_CHARS)}\n[… ${lines} lines total. Read the rest with read("${path}", offset, limit) or search it.]`
-    entries.push(`<file name="${attrEscape(name)}" path="${path}" summary="${attrEscape(out.summary)}">\n${body}\n</file>`)
+    entries.push(`<file name="${attrEscape(name)}" path="${path}" summary="${attrEscape(out.summary)}"${at}>\n${body}\n</file>`)
   }
   if (entries.length === 0) return []
-  return [{ type: "text", text: `<attachments>\nThe CEO attached these files. Text files are also saved as documents (path) that employees can read.\n${entries.join("\n")}\n</attachments>` }, ...images]
+  return [{ type: "text", text: `<attachments>\nThe CEO attached these files. Text versions are saved as documents (path) that employees can read.${workdir ? " Originals are in the bash working folder (original), for exact computation with code." : ""}\n${entries.join("\n")}\n</attachments>` }, ...images]
+}
+
+function saveOriginal(workdir: string, name: string, data: Buffer): string {
+  const dir = join(workdir, "uploads")
+  mkdirSync(dir, { recursive: true })
+  const dot = name.lastIndexOf(".")
+  const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""]
+  let file = name
+  for (let i = 2; existsSync(join(dir, file)); i++) file = `${stem} (${i})${ext}`
+  writeFileSync(join(dir, file), data)
+  return `uploads/${file}`
 }
 
 function clean(name: string) {

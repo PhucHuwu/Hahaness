@@ -87,7 +87,7 @@ export function toMarkdown(def: AgentDef): string {
     .join("\n")
 }
 
-export const CAPABILITIES = ["read", "write", "webfetch", "websearch"] as const
+export const CAPABILITIES = ["read", "write", "webfetch", "websearch", "bash"] as const
 export type Capability = (typeof CAPABILITIES)[number]
 
 export interface HireRequest {
@@ -111,6 +111,7 @@ export function capabilityRules(capabilities: readonly Capability[]): Rule[] {
     ...(caps.has("write") ? [{ action: "write", resource: "drafts/*", effect: "allow" as const }] : []),
     { action: "webfetch", resource: "*", effect: caps.has("webfetch") ? "allow" : "deny" },
     { action: "websearch", resource: "*", effect: caps.has("websearch") ? "allow" : "deny" },
+    { action: "bash", resource: "*", effect: caps.has("bash") ? "allow" : "deny" },
     ...MANAGEMENT_ACTIONS.filter((a) => a !== "question").map((action) => ({ action, resource: "*", effect: "deny" as const })),
   ]
 }

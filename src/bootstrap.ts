@@ -11,6 +11,7 @@ import { SkillStore } from "./context/skills.ts"
 import { McpManager } from "./mcp/manager.ts"
 import * as workspace from "./context/workspace.ts"
 import { documentTools } from "./tool/builtin/fs.ts"
+import { bash } from "./tool/builtin/bash.ts"
 import { webfetch, websearch } from "./tool/builtin/web.ts"
 import { todo } from "./tool/builtin/todo.ts"
 import { memory } from "./tool/builtin/memory.ts"
@@ -30,6 +31,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 
 export interface App {
   cwd: string
+  /** Thư mục làm việc của tool `bash`. */
+  workdir: string
   db: Db
   docs: DocumentStore
   config: Config
@@ -69,7 +72,10 @@ export function defaultDbPath(cwd: string) {
 /** Wiring chuẩn: DB, workspace, vai, tool builtin, skills, MCP, harness. */
 export async function bootstrap(opts: BootstrapOptions): Promise<App> {
   const { cwd } = opts
-  const db = new Db(opts.dbPath ?? defaultDbPath(cwd))
+  const dbPath = opts.dbPath ?? defaultDbPath(cwd)
+  const db = new Db(dbPath)
+  /** Thư mục làm việc của `bash`, cạnh file DB (không phải thư mục mã nguồn). */
+  const workdir = process.env.HAHANESS_WORKDIR ?? join(dbPath === ":memory:" ? join(cwd, ".hahaness") : dirname(dbPath), "workspace")
   const docs = new DocumentStore(db)
   workspace.ensure(docs)
 
@@ -90,6 +96,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
   const scheduler = new Scheduler({ db, agents, tools, blocked: () => app.providerError, onChange: opts.onScheduleChange })
   tools.register(
     ...documentTools(docs),
+    bash(workdir),
     webfetch,
     websearch,
     todo,
@@ -111,6 +118,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
   const telegram = new TelegramChannel(db, () => harness)
   harness = new Harness({
     cwd,
+    workdir,
     db,
     docs,
     providers,
@@ -143,7 +151,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
     mcp.closeAll()
     db.close()
   }
-  const app: App = { cwd, db, docs, config, providerError, agents, tools, skills, mcp, harness, scheduler, telegram, close }
+  const app: App = { cwd, workdir, db, docs, config, providerError, agents, tools, skills, mcp, harness, scheduler, telegram, close }
   if (opts.scheduler !== false) scheduler.start()
   if (opts.channels !== false) telegram.start()
   // Làm tiếp việc dở từ trước khi tắt (không chờ ai mở web). Chưa cấu hình provider thì lượt sẽ lỗi → để sau.

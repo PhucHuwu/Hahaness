@@ -21,7 +21,7 @@ before(async () => {
   const seed = new Db(dbPath)
   saveConfig(seed, { defaultModel: "scripted/any", providers: { scripted: { type: "custom", module: join(root, "examples", "providers", "scripted.ts") } } })
   seed.close()
-  const s = await startServer({ cwd: dir, dbPath, port: 0, uiDir: join(dir, "no-ui") })
+  const s = await startServer({ cwd: dir, dbPath, port: 0, uiDir: join(dir, "no-ui"), auth: false })
   base = `http://127.0.0.1:${(s.server.address() as { port: number }).port}`
   app = s.app
   close = s.close

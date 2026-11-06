@@ -116,6 +116,8 @@ export function chatRoutes(r: Router, app: App) {
       parts = await attach(
         harness.cfg.docs,
         files.map((f) => ({ name: f.name ?? "file", mime: f.mime, data: Buffer.from(f.data ?? "", "base64") })),
+        "ceo",
+        app.workdir,
       )
     } catch (e) {
       if (e instanceof UploadError) throw new HttpError(400, e.message)
@@ -224,7 +226,7 @@ export function chatRoutes(r: Router, app: App) {
   )
 
   r.post("/api/staff", async (req) => {
-    const body = await req.json<{ id?: string; name?: string; description?: string; system?: string; capabilities?: Array<"read" | "write" | "webfetch" | "websearch"> }>()
+    const body = await req.json<{ id?: string; name?: string; description?: string; system?: string; capabilities?: Array<"read" | "write" | "webfetch" | "websearch" | "bash"> }>()
     if (!body.id || !body.name || !body.system) throw new HttpError(400, "id, name and system are required")
     if (agents.has(body.id)) throw new HttpError(409, `employee ${body.id} already exists`)
     const def = await agents.hire({

@@ -10,6 +10,6 @@ export default defineConfig({
   build: { outDir: "dist", emptyOutDir: true },
   server: {
     port: 5173,
-    proxy: { "/api": { target: process.env.HAHANESS_API ?? "http://127.0.0.1:7331", changeOrigin: true } },
+    proxy: { "/api": { target: process.env.HAHANESS_API ?? "http://127.0.0.1:7331", changeOrigin: false } },
   },
 })

@@ -22,11 +22,11 @@ CEO gửi kèm file khi nhắn CTO, trên web (nút 📎, kéo thả hoặc dán
   không cần multipart). Telegram chỉ cho bot tải file ≤ 20 MB.
 - Loại file không hỗ trợ (`.doc`, `.xls` cũ, `.exe`…) bị từ chối với thông báo tiếng Việt. Tin nhắn
   không được gửi đi, nên CEO có thể sửa rồi gửi lại.
+- Bản gốc mọi file cũng được lưu vào thư mục làm việc của `bash` (`uploads/<tên>`) để code tính chính xác (`15-bash.md`).
 - Trùng tên thì không ghi đè: file mới thành `uploads/bao-cao.pdf (2).md`.
 - UI: tin nhắn hiện danh sách file (link sang trang Kết quả → "File bạn gửi") và ảnh thu nhỏ thay vì
   khối `<attachments>`.
 
 ## Chưa làm
 
-- Chạy code để phân tích dữ liệu (cần sandbox). Hiện agent đọc CSV và tự tính.
 - OCR cho PDF scan, file `.doc`/`.xls`/`.pptx`.

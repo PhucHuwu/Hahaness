@@ -533,10 +533,10 @@ function attachedNames(m: Message): Array<{ name: string; path?: string; summary
   const out: Array<{ name: string; path?: string; summary?: string }> = []
   for (const p of m.parts) {
     if (p.type !== "text" || !p.text.startsWith("<attachments>")) continue
-    for (const f of p.text.matchAll(/<file name="([^"]*)"(?: kind="image")?(?: path="([^"]*)")?(?: summary="([^"]*)")?>/g)) {
-      const un = (s?: string) => s?.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&amp;/g, "&")
-      if (/ kind="image"/.test(f[0])) continue
-      out.push({ name: un(f[1])!, path: un(f[2]), summary: un(f[3]) })
+    for (const f of p.text.matchAll(/<file\b([^>]*)>/g)) {
+      const at = (k: string) => new RegExp(` ${k}="([^"]*)"`).exec(f[1]!)?.[1]?.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&amp;/g, "&")
+      if (at("kind") === "image") continue
+      out.push({ name: at("name") ?? "file", path: at("path"), summary: at("summary") })
     }
   }
   return out

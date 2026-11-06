@@ -5,10 +5,11 @@
 import { spawn } from "node:child_process"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { startServer } from "../src/server/index.ts"
+import { logSetup, startServer } from "../src/server/index.ts"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
-const { url, app } = await startServer({ cwd: process.cwd(), port: Number(process.env.PORT ?? 7331) })
+const { url, app, auth } = await startServer({ cwd: process.cwd(), port: Number(process.env.PORT ?? 7331) })
+logSetup(auth)
 console.log(`API: ${url}  workspace: ${app.cwd}`)
 if (app.providerError) console.log(`Provider: ${app.providerError} — open Settings to configure.`)
 

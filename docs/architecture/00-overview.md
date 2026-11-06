@@ -4,7 +4,7 @@
 
 Một **công ty ảo** chạy bằng LLM cho người dùng **no-code**. Người dùng là **CEO**; họ nói chuyện với **CTO** (agent điều hành). CTO phân việc cho **nhân viên** (researcher, writer, marketer, analyst…) và **tuyển nhân viên mới** khi cần. Kết quả là tài liệu, kế hoạch, nội dung — không phải code.
 
-Ba trọng tâm kỹ thuật: **context engineering**, **agent loop**, **tool calling**. Cả ba học từ hermes-agent, opencode, openclaw (xem `docs/research/`), nhưng bỏ hết phần coding-agent (shell, edit code, git).
+Ba trọng tâm kỹ thuật: **context engineering**, **agent loop**, **tool calling**. Cả ba học từ hermes-agent, opencode, openclaw (xem `docs/research/`), nhưng bỏ phần dành cho người lập trình (edit code, git). Agent vẫn có `bash` để tính toán và xử lý file khi việc cần (`15-bash.md`).
 
 ## Người dùng là ai
 
@@ -14,7 +14,7 @@ Ba trọng tâm kỹ thuật: **context engineering**, **agent loop**, **tool ca
 
 Hệ quả thiết kế:
 1. **Không hỏi permission mặc định.** An toàn đến từ giới hạn năng lực của từng vai (nhân viên chỉ đọc tài liệu + web, chỉ ghi vào `drafts/`), không từ việc hỏi CEO từng lần. Ngoại lệ: nối MCP mới (chạy lệnh trên máy) cần CEO duyệt.
-2. **Một file SQLite là cả công ty.** Tài liệu là bản ghi trong DB, không phải file trên đĩa → tool tài liệu không chạm được filesystem. Không có shell.
+2. **Một file SQLite là cả công ty.** Tài liệu là bản ghi trong DB, không phải file trên đĩa → tool tài liệu không chạm được filesystem. Chỉ `bash` chạy trong một thư mục làm việc riêng cạnh DB (`15-bash.md`).
 3. **Nội dung vẫn là markdown.** Nhân viên, kỹ năng, memory, deliverable lưu dạng markdown trong DB; UI hiển thị, CEO sửa được khi muốn.
 
 ## Mô hình công ty
@@ -56,7 +56,7 @@ src/
   provider/    ProviderClient, registry (provider/model), openai-compatible
   config.ts    config trong DB, {env:VAR}, custom provider module
   tool/        define, registry, execute pipeline, output truncation
-    builtin/   read, list, search, write, edit, webfetch, websearch, todo, memory, question, delegate, hire, skill,
+    builtin/   read, list, search, write, edit, bash, webfetch, websearch, todo, memory, question, delegate, hire, skill,
                manage (knowledge, manage_skill, staff, mcp_manage), schedule
   context/     system tiers, documents (DocumentStore), workspace (COMPANY/USER/MEMORY), knowledge (cây tri thức), skills, budget, compaction
   permission/  ruleset, ask gate
@@ -78,4 +78,4 @@ ui/            React + Vite: Chat, Kết quả, Tri thức, Kỹ năng, MCP, Cà
   schedules, schedule_runs  việc định kỳ và lịch sử chạy
 ```
 
-Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`, `08-storage.md`, `09-schedules.md`, `10-knowledge-tree.md`, `11-one-session-per-agent.md`, `12-durable-work.md`, `13-telegram.md`, `14-uploads.md`.
+Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`, `08-storage.md`, `09-schedules.md`, `10-knowledge-tree.md`, `11-one-session-per-agent.md`, `12-durable-work.md`, `13-telegram.md`, `14-uploads.md`, `15-bash.md`.

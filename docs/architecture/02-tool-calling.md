@@ -42,7 +42,7 @@ model emits tool-call
 
 - `MAX_LINES = 2000`, `MAX_BYTES = 50 * 1024`.
 - Vượt → lưu bản đầy đủ vào tài liệu ẩn `tool-output/<callID>.txt` (qua callback `saveOutput` của harness), output kết thúc bằng `[showing lines 1-N of M; full output saved to <path>, read it with offset/limit]`. Model `read` lại với offset.
-- Tool `shell` có thêm `tail` mode: giữ 200 dòng cuối thay vì đầu (log build thường quan trọng ở cuối).
+- Tool `bash` dùng `tail` mode (`metadata.tail`): giữ phần cuối thay vì phần đầu (lỗi và kết quả thường ở cuối).
 
 ## Permission (`permission/ruleset.ts`)
 
@@ -67,7 +67,7 @@ type Rule = { action: string; resource: string; effect: "allow" | "ask" | "deny"
 
 ## Builtin tools v0.1
 
-Không có shell, không edit code. Tool tài liệu (`documentTools(docs)`) đọc/ghi bảng `documents` trong DB, không chạm filesystem; path ảo được chuẩn hóa và `..` bị từ chối (`normalizePath`).
+Không edit code. Tool tài liệu (`documentTools(docs)`) đọc/ghi bảng `documents` trong DB, không chạm filesystem; path ảo được chuẩn hóa và `..` bị từ chối (`normalizePath`).
 
 | Tool | Mục đích | Permission action | Ai có |
 |---|---|---|---|
@@ -76,6 +76,7 @@ Không có shell, không edit code. Tool tài liệu (`documentTools(docs)`) đ�
 | `search` | tìm cụm từ trong tài liệu (không phân biệt hoa thường, cả tiếng Việt) | `read` | mọi vai |
 | `write` | tạo/ghi đè tài liệu | `write` (resource = path, nhân viên chỉ `drafts/*`) | CTO, writer, marketer |
 | `edit` | thay một đoạn chữ chính xác trong tài liệu (`old` → `new`, `all?`); không thấy hoặc thấy nhiều chỗ → lỗi hướng dẫn model sửa | `write` (như trên) | ai có `write` |
+| `bash` | chạy lệnh/code (Python…) trong thư mục làm việc riêng, env không có secret (`15-bash.md`) | `bash` (resource = lệnh); nhân viên chỉ khi có capability `bash` | CTO |
 | `webfetch` | tải trang → text | `webfetch` (resource = hostname) | CTO, researcher, writer, marketer |
 | `websearch` | tìm web (DuckDuckGo HTML, không cần key) | `websearch` | researcher |
 | `question` | hỏi CEO một câu kèm lựa chọn | — (hard deny cho nhân viên) | CTO |

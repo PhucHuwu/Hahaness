@@ -61,3 +61,4 @@ Server chỉ bind `127.0.0.1`, không có xác thực — dùng trên máy mình
 | [12-durable-work](docs/architecture/12-durable-work.md) | Việc không phụ thuộc trình duyệt; inbox/việc được giao lưu DB, server lên lại tự làm tiếp |
 | [13-telegram](docs/architecture/13-telegram.md) | CEO chat với CTO qua bot Telegram (long polling, ghép nối bằng mã) |
 | [14-uploads](docs/architecture/14-uploads.md) | File gửi kèm: PDF/Excel/Word thành tài liệu `uploads/`, ảnh gửi thẳng cho model |
+| [15-bash](docs/architecture/15-bash.md) | Agent chạy code khi việc cần (tính toán, xử lý file); thư mục làm việc riêng, không lộ secret |

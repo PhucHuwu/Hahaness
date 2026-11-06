@@ -31,6 +31,8 @@ import type { CompactionConfig } from "./config.ts"
 
 export interface HarnessConfig {
   cwd: string
+  /** Thư mục làm việc của tool `bash`; bản gốc file CEO gửi nằm ở `uploads/` trong đó. */
+  workdir?: string
   db: Db
   docs: DocumentStore
   providers: ProviderRegistry
@@ -749,7 +751,9 @@ export function homeSessions(sessions: Session[]): Map<string, Session> {
 function employeeRules(agent: AgentDef): Ruleset {
   if (agent.mode === "primary") return []
   const deny = (action: string) => ({ action, resource: "*", effect: "deny" as const })
-  return MANAGEMENT_ACTIONS.filter((a) => a !== "question" && (a !== "delegate" || agent.role === "leaf")).map(deny)
+  // bash chỉ khi vai được cấp rõ ràng (capability `bash` hoặc rule allow trong markdown).
+  const bash = agent.permissions.some((r) => r.action === "bash" && r.effect === "allow") ? [] : [deny("bash")]
+  return [...MANAGEMENT_ACTIONS.filter((a) => a !== "question" && (a !== "delegate" || agent.role === "leaf")).map(deny), ...bash]
 }
 
 /** Cho nhân viên biết chỗ được lưu, để không thử `deliverables/` rồi bị từ chối. */
