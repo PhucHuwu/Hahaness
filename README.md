@@ -27,14 +27,16 @@ CEO> @writer viết lại email số 2 ngắn hơn một nửa
 
 CTO lưu mô tả công ty và tài liệu vào **Tri thức**, biến cách làm lặp lại thành **Kỹ năng**, tự `hire` vai mới (ví dụ `seo-specialist`) khi không ai hợp việc, và nộp kết quả cuối vào **Kết quả**. Nối công cụ ngoài (MCP) thì CTO hỏi bạn duyệt trước.
 
-Giao diện có 6 trang: **Chat**, **Kết quả** (xem, chép, tải `.md`), **Tri thức** (công ty, về bạn, ghi nhớ, tài liệu, nhân viên), **Kỹ năng**, **MCP**, **Cài đặt**. Các trang ngoài Chat chủ yếu để xem; vẫn sửa tay được.
+Việc lặp lại cũng chỉ cần nói: `CEO> mỗi 2h sáng cho researcher đọc tin thị trường, điều gì mới thì lưu vào tri thức`. CTO tạo **lịch**; tới giờ công ty tự thức dậy, giao việc, CTO lưu kết quả và để lại một phiên tóm tắt cho bạn đọc sau.
+
+Giao diện có 7 trang: **Chat**, **Kết quả** (xem, chép, tải `.md`), **Tri thức** (công ty, về bạn, ghi nhớ, tài liệu, nhân viên), **Kỹ năng**, **Lịch** (việc định kỳ, lịch sử chạy), **MCP**, **Cài đặt**. Các trang ngoài Chat chủ yếu để xem; vẫn sửa tay được.
 
 Các lệnh khác:
 
 ```sh
 npm run ui:build  # build ui/dist, rồi
 npm run serve     # server tự serve UI tĩnh tại http://127.0.0.1:7331
-npm test          # 23 test với provider giả + MCP server giả, không cần API key
+npm test          # test với provider giả + MCP server giả, không cần API key
 npm run typecheck
 ```
 
@@ -53,3 +55,4 @@ Server chỉ bind `127.0.0.1`, không có xác thực — dùng trên máy mình
 | [06-providers](docs/architecture/06-providers.md) | Cấu hình provider, OpenAI-compatible, custom provider module |
 | [07-ui-server](docs/architecture/07-ui-server.md) | Giao diện web, API + SSE, knowledge/skills/results, MCP client, giới hạn |
 | [08-storage](docs/architecture/08-storage.md) | Một file SQLite, schema, tool quản trị của CTO |
+| [09-schedules](docs/architecture/09-schedules.md) | Việc định kỳ: cron, phiên CTO tự mở, chạy bù, tool bắt buộc |

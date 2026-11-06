@@ -193,7 +193,53 @@ export interface McpServerStatus {
   tools: Array<{ name: string; description?: string; toolName: string }>
 }
 
+export interface Brief {
+  goal: string
+  context: string
+  done_when: string
+  output?: string
+}
+
+export type RunStatus = "running" | "completed" | "failed" | "stopped" | "needs_input" | "skipped" | "blocked" | "interrupted"
+
+export interface Schedule {
+  id: string
+  title: string
+  agent: string
+  cron: string
+  task: Brief
+  followUp?: string
+  tools?: string[]
+  enabled: boolean
+  createdBy: string
+  createdAt: number
+  updatedAt: number
+  nextRunAt?: number
+  lastRunAt?: number
+  lastStatus?: RunStatus
+  lastSessionID?: string
+  lastError?: string
+  /** Chỉ có trong response của server. */
+  running: boolean
+  missingTools: string[]
+  upcoming: number[]
+}
+
+export interface ScheduleRun {
+  id: string
+  scheduleID: string
+  dueAt: number
+  startedAt: number
+  finishedAt?: number
+  reason: "due" | "manual"
+  status: RunStatus
+  sessionID?: string
+  workerSessionID?: string
+  error?: string
+}
+
 export type ServerEvent =
+  | { type: "schedule"; id: string }
   | { type: "text"; sessionID: string; delta: string }
   | { type: "reasoning"; sessionID: string; delta: string }
   | { type: "tool-start"; sessionID: string; name: string; args: unknown; callID: string }

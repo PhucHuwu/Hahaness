@@ -23,7 +23,8 @@ function loadSqlite(): typeof import("node:sqlite") {
 
 const { DatabaseSync } = loadSqlite()
 
-const SCHEMA_VERSION = 1
+/** Mọi bảng `IF NOT EXISTS` → DB cũ chạy lại SCHEMA chỉ tạo bảng còn thiếu. v2: schedules. */
+const SCHEMA_VERSION = 2
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -67,6 +68,18 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY,
   config TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS schedules (
+  id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS schedule_runs (
+  id TEXT PRIMARY KEY,
+  schedule_id TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS schedule_runs_schedule ON schedule_runs(schedule_id, started_at);
 `
 
 /** Một file SQLite chứa toàn bộ công ty. `:memory:` cho test. */

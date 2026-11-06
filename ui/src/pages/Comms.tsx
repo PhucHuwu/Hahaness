@@ -28,7 +28,7 @@ export function Comms({ agentName }: { agentName: (id: string) => string }) {
     if (ev.type === "session" || (ev.type === "turn" && !ev.running)) void load()
   })
 
-  const name = (id: string) => (id === "ceo" ? "Bạn (CEO)" : agentName(id))
+  const name = (id: string) => (id === "ceo" ? "Bạn (CEO)" : id === "scheduler" ? "Lịch tự động" : agentName(id))
   const people = [...new Set((items ?? []).flatMap((i) => [i.from, i.to]))].filter((p) => p !== "ceo")
   const shown = (items ?? []).filter((i) => !who || i.from === who || i.to === who)
 

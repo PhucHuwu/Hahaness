@@ -9,7 +9,7 @@
     "ui:dev": "vite --config ui/vite.config.ts",
     "ui:build": "vite build --config ui/vite.config.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p ui/tsconfig.json",
-    "test": "tsx --test src/**/*.test.ts"
+    "test": "tsx --test 'src/**/*.test.ts'"
   },
   "dependencies": {
     "react": "^19.2.0",

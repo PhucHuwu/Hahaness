@@ -20,6 +20,8 @@ import { askLead } from "./tool/builtin/ask-lead.ts"
 import { hire } from "./tool/builtin/hire.ts"
 import { skill } from "./tool/builtin/skill.ts"
 import { knowledgeTool, manageSkillTool, mcpTool, staffTool } from "./tool/builtin/manage.ts"
+import { scheduleTool } from "./tool/builtin/schedule.ts"
+import { Scheduler } from "./schedule/scheduler.ts"
 import type { AskHandler } from "./permission/ask.ts"
 import type { LoopEvents } from "./core/loop.ts"
 
@@ -37,6 +39,7 @@ export interface App {
   skills: SkillStore
   mcp: McpManager
   harness: Harness
+  scheduler: Scheduler
   close(): void
 }
 
@@ -49,6 +52,9 @@ export interface BootstrapOptions {
   questionHandler: QuestionHandler
   /** false → không kết nối MCP lúc khởi động (test). */
   mcp?: boolean
+  /** false → không tự chạy việc định kỳ (CRUD vẫn dùng được). */
+  scheduler?: boolean
+  onScheduleChange?: (scheduleID: string) => void
 }
 
 export function defaultDbPath(cwd: string) {
@@ -76,6 +82,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
 
   const tools = new ToolRegistry()
   const mcp = new McpManager(db, tools)
+  const scheduler = new Scheduler({ db, agents, tools, blocked: () => app.providerError, onChange: opts.onScheduleChange })
   tools.register(
     ...documentTools(docs),
     webfetch,
@@ -91,6 +98,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
     manageSkillTool(skills),
     staffTool(agents),
     mcpTool(mcp),
+    scheduleTool(scheduler),
   )
   await mcp.load({ connect: opts.mcp !== false })
 
@@ -110,9 +118,14 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
     events: opts.events,
   })
 
+  scheduler.attach(harness)
+
   const close = () => {
+    scheduler.stop()
     mcp.closeAll()
     db.close()
   }
-  return { cwd, db, docs, config, providerError, agents, tools, skills, mcp, harness, close }
+  const app: App = { cwd, db, docs, config, providerError, agents, tools, skills, mcp, harness, scheduler, close }
+  if (opts.scheduler !== false) scheduler.start()
+  return app
 }

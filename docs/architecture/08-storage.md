@@ -15,7 +15,7 @@ Người dùng là CEO no-code: họ **không tự làm gì**, chỉ ra lệnh c
 - Node 22 in `ExperimentalWarning` khi load; `src/core/db.ts` lọc **đúng warning đó** trong lúc `createRequire("node:sqlite")`, rồi trả lại `process.emitWarning` gốc.
 - API đồng bộ: hợp với workload nhỏ (một công ty, vài nghìn tài liệu). `SessionStore`/`SkillStore` giữ chữ ký `async` để không đổi caller.
 - Bản build hiện tại **không có FTS5** → `DocumentStore.search` lọc trong JS bằng `toLocaleLowerCase` (đúng với tiếng Việt; `LIKE`/`lower()` của SQLite chỉ xử lý ASCII).
-- Version schema bằng `PRAGMA user_version`.
+- Version schema bằng `PRAGMA user_version`. Mọi bảng `CREATE … IF NOT EXISTS`, nên nâng version chỉ cần chạy lại `SCHEMA` (v1 → v2 thêm `schedules`, `schedule_runs`).
 
 ## Schema (v1)
 
@@ -28,6 +28,8 @@ Người dùng là CEO no-code: họ **không tự làm gì**, chỉ ra lệnh c
 | `skills` | id, content (markdown + frontmatter), updated_at | `skills/<id>/SKILL.md` |
 | `settings` | key, value (JSON) | `hahaness.json` (key `config`) |
 | `mcp_servers` | id, config (JSON) | `.hahaness/mcp.json` |
+| `schedules` | id, data (JSON `Schedule`), created_at | — (v2, xem `09-schedules.md`) |
+| `schedule_runs` | id, schedule_id, started_at, data (JSON `ScheduleRun`) | — (v2) |
 
 ### Documents giữ dạng path
 
@@ -54,10 +56,11 @@ Bản đầu lưu workspace thành file (cột "Thay cho" ở trên). Bước nh
 | `staff` | show, edit, fire | sửa job description/capabilities, cho nghỉ; không sửa/đuổi CTO |
 | `mcp_manage` | list, add, enable, disable, reconnect, remove | kết nối công cụ ngoài; **`add` là `ask`** trong ruleset CTO → CEO duyệt trên UI (stdio chạy lệnh trên máy) |
 | `memory` | list, add, replace, remove | sự thật ngắn (≤ 4k ký tự) |
+| `schedule` | list, create, update, enable, disable, remove, run_now, history | việc định kỳ (`09-schedules.md`) |
 | `hire` | — | tuyển vai mới |
 | `search` | — | tìm trong tài liệu (mọi vai có `read`) |
 
-`MANAGEMENT_ACTIONS` (delegate, hire, memory, question, knowledge, manage_skill, staff, mcp_manage) luôn bị deny cho nhân viên: `Harness.spawn` deny tất cả trừ `delegate` (deny thêm cho vai leaf), và `capabilityRules` của vai được tuyển cũng deny. Test: "employees never get management tools".
+`MANAGEMENT_ACTIONS` (delegate, hire, memory, question, knowledge, manage_skill, staff, mcp_manage, schedule) luôn bị deny cho nhân viên: `Harness.spawn` deny tất cả trừ `delegate` (deny thêm cho vai leaf), và `capabilityRules` của vai được tuyển cũng deny. Test: "employees never get management tools".
 
 Thay đổi có hiệu lực ở **phiên mới** (system prompt đóng băng per-session, xem `03`); tool trả câu nhắc này cho model.
 

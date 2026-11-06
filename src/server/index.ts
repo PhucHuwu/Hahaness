@@ -7,6 +7,7 @@ import { id } from "../core/id.ts"
 import { Router, SseBus, json, serveStatic, HttpError } from "./http.ts"
 import { chatRoutes, sessionView } from "./routes-chat.ts"
 import { adminRoutes } from "./routes-admin.ts"
+import { scheduleRoutes } from "./routes-schedule.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -18,6 +19,8 @@ export interface ServerOptions {
   host?: string
   /** Thư mục build UI (ui/dist). Không có → chỉ API (dùng Vite dev server + proxy). */
   uiDir?: string
+  /** false → không tự chạy việc định kỳ (test). */
+  scheduler?: boolean
 }
 
 /**
@@ -50,6 +53,8 @@ export async function startServer(opts: ServerOptions) {
   const app = await bootstrap({
     cwd: opts.cwd,
     dbPath: opts.dbPath,
+    scheduler: opts.scheduler,
+    onScheduleChange: (scheduleID) => bus.emit({ type: "schedule", id: scheduleID }),
     questionHandler: (q, options) => ask(askingSession, "question", q, options),
     askHandler: async (req) => {
       const a = await ask(req.sessionID, "permission", `${req.agent} wants to ${req.action} ${req.resource}`, ["Allow", "Deny"])
@@ -89,6 +94,7 @@ export async function startServer(opts: ServerOptions) {
   })
   chatRoutes(router, app)
   adminRoutes(router, app)
+  scheduleRoutes(router, app)
 
   const uiDir = opts.uiDir ?? join(here, "..", "..", "ui", "dist")
   const hasUI = existsSync(join(uiDir, "index.html"))

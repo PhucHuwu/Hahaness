@@ -5,6 +5,7 @@ import { Knowledge } from "./pages/Knowledge.tsx"
 import { Results } from "./pages/Results.tsx"
 import { Skills } from "./pages/Skills.tsx"
 import { Mcp } from "./pages/Mcp.tsx"
+import { Schedules } from "./pages/Schedules.tsx"
 import { useConnectionState } from "./events.ts"
 
 const PAGES = [
@@ -12,6 +13,7 @@ const PAGES = [
   ["results", "Kết quả"],
   ["knowledge", "Tri thức"],
   ["skills", "Kỹ năng"],
+  ["schedules", "Lịch"],
   ["mcp", "MCP"],
   ["settings", "Cài đặt"],
 ] as const
@@ -51,6 +53,7 @@ export function App() {
         {page === "results" && <Results path={arg || undefined} />}
         {page === "knowledge" && <Knowledge />}
         {page === "skills" && <Skills />}
+        {page === "schedules" && <Schedules id={arg || undefined} />}
         {page === "mcp" && <Mcp />}
         {page === "settings" && <Settings />}
       </main>

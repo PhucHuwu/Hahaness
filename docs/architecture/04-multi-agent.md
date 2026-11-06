@@ -27,7 +27,7 @@ Merge: builtin → bảng `staff` (`AgentRegistry.useDb`). Cùng id thì dòng D
 
 | id | mode | context | Làm gì | Tool |
 |---|---|---|---|---|
-| `cto` | primary | — | Nói chuyện với CEO; lập kế hoạch, tuyển, giao việc, duyệt, lưu deliverable, ghi memory; quản lý tri thức, kỹ năng, nhân viên, MCP | `delegate`, `hire`, `memory`, `todo`, `question`, `read`, `list`, `search`, `write`, `webfetch`, `knowledge`, `manage_skill`, `staff`, `mcp_manage` |
+| `cto` | primary | — | Nói chuyện với CEO; lập kế hoạch, tuyển, giao việc, duyệt, lưu deliverable, ghi memory; quản lý tri thức, kỹ năng, nhân viên, MCP, việc định kỳ | `delegate`, `hire`, `memory`, `todo`, `question`, `read`, `list`, `search`, `write`, `webfetch`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`, `schedule` |
 | `researcher` | subagent | isolated | Sự thật, đối thủ, số liệu, nguồn | `read`, `webfetch`, `websearch` |
 | `writer` | subagent | isolated | Bài viết, email, script | `read`, `write(drafts/*)`, `webfetch` |
 | `marketer` | subagent | isolated | Chiến dịch, định vị, copy | `read`, `write(drafts/*)`, `webfetch` |
@@ -42,7 +42,7 @@ hire({ id, name, description, system, capabilities: ("read"|"write"|"webfetch"|"
 ```
 
 - Harness dịch `capabilities` thành ruleset cố định. CTO **không** tự viết permission — tránh việc model cấp quyền quá tay.
-- Luôn cứng: `write` chỉ `drafts/*`; mọi `MANAGEMENT_ACTIONS` (delegate, hire, memory, question, knowledge, manage_skill, staff, mcp_manage) = deny.
+- Luôn cứng: `write` chỉ `drafts/*`; mọi `MANAGEMENT_ACTIONS` (delegate, hire, memory, question, knowledge, manage_skill, staff, mcp_manage, schedule) = deny.
 - Ghi vào bảng `staff` ngay → tồn tại qua các phiên. Sau này CTO sửa job description/capabilities hoặc cho nghỉ bằng tool `staff` (`show`/`edit`/`fire`); CEO cũng sửa được trên UI.
 - Không được ghi đè vai `primary`. Trùng id → báo lỗi cho model, gợi ý dùng `delegate`.
 - `id` được slug hóa.
@@ -103,7 +103,7 @@ Nhân viên thiếu thông tin hoặc gặp quyết định không phải của 
 
 ### Isolation của nhân viên
 
-- Hard deny (không config được): mọi `MANAGEMENT_ACTIONS` trừ `delegate` — gồm `question` (không hỏi CEO trực tiếp), `memory`, `hire`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`; thêm `delegate` nếu `role: leaf`. Test: "employees never get management tools".
+- Hard deny (không config được): mọi `MANAGEMENT_ACTIONS` trừ `delegate` — gồm `question` (không hỏi CEO trực tiếp), `memory`, `hire`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`, `schedule`; thêm `delegate` nếu `role: leaf`. Test: "employees never get management tools".
 - Ruleset = `inherit(parent, child)`: parent deny → child không bao giờ allow.
 - System context: Tier A của chính họ + `COMPANY.md`; **không** có `USER.md`/`MEMORY.md` (không cần biết sếp thích gì, và giảm rò rỉ).
 - `context: fork` (analyst): thêm summary compaction gần nhất của CTO + 20 message gần nhất, cap 30k token.
@@ -117,6 +117,7 @@ Nhân viên thiếu thông tin hoặc gặp quyết định không phải của 
 | `agent` | id agent / `ceo` | brief khi spawn (`from` = agent cha, hoặc `ceo` ở direct mode); `delegate steer` (`from` = CTO) |
 | `subagent` | id nhân viên | báo cáo nền đổ vào inbox phiên cha |
 | `system` | — | harness (compaction, max steps) |
+| `agent` | `scheduler` | ghi chú `[Scheduled job]` và brief của việc định kỳ (`09-schedules.md`) |
 
 Trước đây steer đánh `source: user`, nên không phân biệt được với CEO. Brief cũ (`source: system`, bắt đầu bằng "You are a subagent") vẫn được UI/timeline nhận ra. `from` chỉ là metadata cho UI; model không thấy.
 

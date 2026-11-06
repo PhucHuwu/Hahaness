@@ -337,6 +337,16 @@ function MessageView({ m, agentName }: { m: Message; agentName: (id: string) => 
   if (m.role === "user") {
     const text = m.parts.map((p) => (p.type === "text" ? p.text : "")).join("")
     if (m.source === "subagent") return <SubagentResult text={text} agentName={agentName} />
+    if (m.from === "scheduler") {
+      const title = /^\[Scheduled job\] "([^"]*)"/.exec(text)?.[1]
+      const g = /<goal>([\s\S]*?)<\/goal>/.exec(text)?.[1]
+      return (
+        <div className="msg agent">
+          <div className="from">Lịch tự động{title ? ` · ${title}` : ""}</div>
+          {g ? <BriefView text={text} /> : text}
+        </div>
+      )
+    }
     const brief = m.source === "agent" || (m.source === "system" && text.startsWith("You are a subagent"))
     if (brief || (m.source === "user" && m.from && m.from !== "ceo")) {
       const g = /<goal>([\s\S]*?)<\/goal>/.exec(text)?.[1]

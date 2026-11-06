@@ -407,7 +407,21 @@ export class Harness {
    * `wakeParent: false` (direct mode từ UI): kết quả vẫn vào inbox CTO nhưng
    * không đánh thức — CTO thấy ở lượt sau thay vì tự trả lời CEO.
    */
-  async spawn(parentID: string, opts: { agent: string; brief: Brief; context?: "isolated" | "fork"; background?: boolean; wakeParent?: boolean; model?: string; from?: string; signal?: AbortSignal }) {
+  async spawn(
+    parentID: string,
+    opts: {
+      agent: string
+      brief: Brief
+      context?: "isolated" | "fork"
+      background?: boolean
+      wakeParent?: boolean
+      model?: string
+      from?: string
+      signal?: AbortSignal
+      /** Background: gọi sau khi báo cáo đã vào inbox phiên cha (và phiên cha đã được đánh thức nếu có). */
+      onReport?: (entry: ResultEntry) => void
+    },
+  ) {
     const parent = this.get(parentID)
     const maxDepth = this.cfg.maxDepth ?? 1
     if (parent.depth >= maxDepth) throw new Error(`delegate: max depth ${maxDepth} reached`)
@@ -469,6 +483,7 @@ export class Harness {
         })
         this.cfg.events.onNotice?.(parentID, `subagent ${child.session.id} finished (${entry.status})`)
         if (!parent.running && opts.wakeParent !== false) void this.wake(parent)
+        opts.onReport?.(entry)
       })
       return { sessionID: child.session.id, status: "running" as const }
     }

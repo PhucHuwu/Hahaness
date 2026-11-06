@@ -100,7 +100,7 @@ export interface HireRequest {
 }
 
 /** Tool chỉ CTO dùng; nhân viên luôn bị deny (harness cũng deny lúc spawn). */
-export const MANAGEMENT_ACTIONS = ["delegate", "hire", "memory", "question", "knowledge", "manage_skill", "staff", "mcp_manage"] as const
+export const MANAGEMENT_ACTIONS = ["delegate", "hire", "memory", "question", "knowledge", "manage_skill", "staff", "mcp_manage", "schedule"] as const
 
 export function capabilityRules(capabilities: readonly Capability[]): Rule[] {
   const caps = new Set(capabilities)

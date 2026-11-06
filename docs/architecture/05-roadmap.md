@@ -41,7 +41,9 @@
 ## v0.3 — Công ty "sống"
 
 - [ ] Auth token + bind ngoài localhost; đóng gói desktop (Tauri/Electron bọc `ui/dist` + server)
-- [ ] Cron/heartbeat: việc định kỳ (báo cáo tuần, theo dõi đối thủ)
+- [x] Cron: việc định kỳ — tool `schedule` của CTO, phiên CTO mới mỗi lần chạy, chạy bù một lần, tool bắt buộc → `blocked`, trang Lịch — xem `09-schedules.md`
+- [ ] Heartbeat / chạy nền khi app đóng; timezone riêng mỗi lịch; trần chi phí mỗi lần chạy
+- [ ] Tool Facebook (đọc feed/nhóm) — qua MCP hoặc builtin; lịch "lướt Facebook" đang chờ tool này
 - [ ] Kênh chat (Telegram/Zalo/Slack) như openclaw gateway
 - [ ] MCP resources/prompts; OAuth cho server HTTP
 - [ ] Precompute compaction; session_search

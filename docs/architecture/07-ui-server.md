@@ -10,7 +10,8 @@ Người dùng no-code không dùng terminal. Giao diện là thứ biến harne
 ui/ (React + Vite, build tĩnh)  ──HTTP JSON + SSE──▶  src/server/ (node:http)  ──▶  Harness
                                                         │
                                                         ├─ routes-chat:  sessions, messages, stop, direct, staff
-                                                        └─ routes-admin: config, knowledge, results, skills, mcp
+                                                        ├─ routes-admin: config, knowledge, results, skills, mcp
+                                                        └─ routes-schedule: việc định kỳ (09-schedules.md)
 ```
 
 - **Server không có framework.** `src/server/http.ts` = router pattern `:param`, JSON body, SSE bus, static. ~150 dòng.

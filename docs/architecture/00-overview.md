@@ -57,11 +57,12 @@ src/
   config.ts    config trong DB, {env:VAR}, custom provider module
   tool/        define, registry, execute pipeline, output truncation
     builtin/   read, list, search, write, webfetch, websearch, todo, memory, question, delegate, hire, skill,
-               manage (knowledge, manage_skill, staff, mcp_manage)
+               manage (knowledge, manage_skill, staff, mcp_manage), schedule
   context/     system tiers, documents (DocumentStore), workspace (COMPANY/USER/MEMORY/knowledge), skills, budget, compaction
   permission/  ruleset, ask gate
   agent/       registry (markdown ↔ AgentDef, hire/edit/update/fire, overlay từ DB), builtin/ (cto, researcher, writer, marketer, analyst)
   mcp/         client (JSON-RPC stdio/http), manager (bảng mcp_servers → ToolRegistry)
+  schedule/    cron (parse/nextRun), scheduler (bảng schedules → tick 30s → phiên CTO mới)
   harness.ts   sessions, resume, spawn fg/bg, ResultEntry, fork context
   bootstrap.ts wiring chuẩn cho server (và test)
   server/      node:http API + SSE cho UI — giao diện duy nhất, không có CLI
@@ -72,6 +73,7 @@ ui/            React + Vite: Chat, Kết quả, Tri thức, Kỹ năng, MCP, Cà
   documents             COMPANY.md, USER.md, MEMORY.md, knowledge/*, drafts/*, deliverables/*, tool-output/*
   staff, skills         nhân viên đã tuyển/sửa, kỹ năng
   settings, mcp_servers providers/model, server MCP
+  schedules, schedule_runs  việc định kỳ và lịch sử chạy
 ```
 
-Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`, `08-storage.md`.
+Chi tiết: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`, `08-storage.md`, `09-schedules.md`.

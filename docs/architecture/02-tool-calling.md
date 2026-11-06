@@ -52,7 +52,7 @@ type Rule = { action: string; resource: string; effect: "allow" | "ask" | "deny"
 ```
 
 - Thứ tự merge: `config.permissions` → `agent.permissions` → `session.permissions` (saved "always" của user). Saved rule **không override** rule `deny` có sẵn: check `denied()` trước.
-- Actions chuẩn: `read`, `write`, `webfetch`, `websearch`, `mcp:<server>:<tool>` và nhóm quản trị `MANAGEMENT_ACTIONS` = `delegate`, `hire`, `memory`, `question`, `knowledge`, `manage_skill`, `staff`, `mcp_manage` (chỉ CTO).
+- Actions chuẩn: `read`, `write`, `webfetch`, `websearch`, `mcp:<server>:<tool>` và nhóm quản trị `MANAGEMENT_ACTIONS` = `delegate`, `hire`, `memory`, `question`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`, `schedule` (chỉ CTO).
 - `write` có resource = path → nhân viên có `{ write, "*", deny }` **rồi** `{ write, "drafts/*", allow }`: deny rộng trước, ngoại lệ hẹp sau.
 - `denied()` (chặn cứng, saved approval không vượt): một rule deny match thì bị chặn, **trừ khi** có một rule allow đứng sau nó, cùng action, resource hẹp hơn hẳn (`drafts/*` so với `*`) và cũng match. Allow đứng trước deny, hay allow rộng bằng hoặc rộng hơn deny (vd. `shell * allow` sau `shell git push* deny`), không gỡ được deny. Deny kế thừa từ phiên cha (`inherit`) nối vào cuối ruleset của con nên con không có ngoại lệ nào đứng sau nó.
 - Bug đã gặp: `capabilityRules` cũ sinh `drafts/* allow` rồi `* deny`, nên nhân viên được tuyển không ghi được gì cả, mà vẫn báo "đã lưu". `fromMarkdown` giờ đưa các deny `action *` lên đầu (`hoistBroadDenies`), nên các dòng `staff` cũ trong DB tự được sửa khi load.
@@ -86,6 +86,7 @@ Không có shell, không edit code. Tool tài liệu (`documentTools(docs)`) đ�
 | `knowledge` | thư viện `knowledge/*`, COMPANY.md, USER.md | `knowledge` (resource = action) | CTO |
 | `manage_skill` | tạo/sửa/xóa kỹ năng | `manage_skill` | CTO |
 | `mcp_manage` | nối/bật/tắt/gỡ server MCP | `mcp_manage` (resource = action; `add` là `ask`) | CTO |
+| `schedule` | việc định kỳ: tạo/sửa/tạm dừng/chạy ngay/lịch sử (`09-schedules.md`) | `schedule` (resource = action) | CTO |
 | `skill` | load thân một kỹ năng | `skill` | mọi vai |
 | `<server>_<tool>` | tool từ MCP server (xem `07-ui-server.md`) | `mcp:<server>:<tool>` | mọi vai, trừ khi vai deny `mcp:*` |
 
