@@ -169,7 +169,7 @@ function UsagePanel({ report, agentName, onClose }: { report: UsageReport; agent
 
       {report.children.length > 0 && (
         <section>
-          <h4>Nhân viên được giao việc · {fmt(childTotal)} token</h4>
+          <h4>Nhân viên · {fmt(childTotal)} token</h4>
           <table className="usage-table">
             <tbody>
               {report.children.map((c) => (

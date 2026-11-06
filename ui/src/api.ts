@@ -47,7 +47,6 @@ export interface CommItem {
   from: string
   to: string
   sessionID: string
-  parentID: string
   text: string
   status?: string
 }
@@ -65,13 +64,14 @@ export interface SessionView {
   session: Session
   running: boolean
   live: boolean
-  depth: number
+  /** Phiên chính của agent; false = lịch sử cũ, chỉ xem. */
+  home: boolean
+  work?: { status: "working" | "waiting" | "idle"; goal?: string; from?: string; queued: number }
   error?: string
 }
 
 export interface SessionDetail extends SessionView {
   messages: Message[]
-  children: SessionView[]
 }
 
 export interface UsageRecord {

@@ -8,18 +8,18 @@ CEO muốn công ty tự làm việc khi không ai ngồi chat: "mỗi 2h sáng 
 
 ```
 schedules (bảng)          tick 30s (Scheduler, trong process server)
- id, title, agent, cron ──▶ tới giờ? ──▶ phiên CTO MỚI (phiên gốc, tiêu đề "Định kỳ · <title>")
+ id, title, agent, cron ──▶ tới giờ? ──▶ phiên DUY NHẤT của CTO (sessionFor, ẩn `question` tới khi xong)
  task (Brief), followUp      │            ├─ ghi chú [Scheduled job] vào inbox (không đánh thức)
- tools?, enabled             │            ├─ agent là nhân viên → spawn background (from: "scheduler")
+ tools?, enabled             │            ├─ agent là nhân viên → spawn background vào phiên của họ (from: "scheduler")
  nextRunAt, last*            │            │    └─ báo cáo vào inbox CTO → CTO thức, xử lý theo followUp
                              │            └─ agent là CTO → CTO tự làm task
                              └──▶ schedule_runs: một dòng mỗi lần chạy (status, sessionID, error)
 ```
 
-- **Mỗi lần chạy là một phiên CTO mới**, không phải phiên CEO đang mở. Lý do: không chen vào cuộc nói chuyện của CEO, không làm phình context của phiên dài; CEO mở phiên đó (link "Xem phiên" ở trang Lịch, hoặc sidebar Chat) để đọc kết quả. Tri thức thu được đi qua `knowledge` nên phiên sau của CEO tự thấy (`<workspace-update>`, xem `03`).
+- **Chạy trong phiên duy nhất của CTO** (1 agent = 1 phiên, xem `11`), không mở phiên mới. Ghi chú `[Scheduled job]` và báo cáo hiện ngay trong cuộc trò chuyện CEO vẫn dùng, "Xem phiên" ở trang Lịch trỏ về đó. Việc giao cho nhân viên đi vào phiên của nhân viên; họ đang bận thì việc xếp hàng. Context phình ra thì compaction lo (`03`). Trước đây mỗi lần chạy là một phiên CTO mới; các phiên đó giờ nằm trong "Lịch sử cũ", chỉ xem.
 - **Đi qua CTO, không cho nhân viên tự lưu.** Nhân viên vẫn bị deny `knowledge`/`memory` như mọi khi (`04`); CTO đối chiếu báo cáo với brief rồi mới lưu. `followUp` mặc định: lưu điều mới bằng `knowledge` (append vào tài liệu cùng chủ đề, bỏ điều đã có) và tóm tắt cho CEO.
 - Ghi chú `[Scheduled job]` được push **trước** spawn và không đánh thức CTO, nên CTO đọc ghi chú + báo cáo trong cùng một lượt (một lần gọi model thay vì hai). Message có `source: "agent"`, `from: "scheduler"`; UI hiện "Lịch tự động". Brief của nhân viên cũng `from: "scheduler"`.
-- Phiên định kỳ bị deny `question` (không ai trả lời; tool sẽ treo tới timeout). Ghi chú dặn CTO đưa việc cần CEO quyết lên đầu câu trả lời cuối.
+- Trong lúc chạy, `harness.unattended(lead)` ẩn `question` ở các lượt của CTO (không ai trả lời; tool sẽ treo tới timeout). Không dùng rule deny vì ruleset cố định cả phiên; hết lần chạy thì `question` trở lại. Ghi chú dặn CTO đưa việc cần CEO quyết lên đầu câu trả lời cuối.
 - Lần chạy kết thúc khi **CTO xử lý xong báo cáo** (`spawn` có hook `onReport`), không phải khi nhân viên nộp bài. Status của lần chạy = status của nhân viên (`completed`, `needs_input`, …), hoặc `failed` nếu lượt của CTO lỗi.
 
 ## Cron
@@ -35,7 +35,7 @@ Không có "chạy mỗi N phút kể từ lúc tạo" riêng: `*/N` đủ cho n
 | Tới giờ | `nextRunAt` tính lại **trước** khi bắt đầu (lỗi giữa chừng không làm chạy lặp) |
 | App tắt / máy ngủ lúc tới giờ | Lần tick đầu sau khi mở chạy bù **một** lần (`dueAt` giữ giờ gốc, UI hiện "bù lịch"), rồi tính lần kế từ bây giờ. Không chạy bù từng lần đã lỡ: tốn tiền, và kết quả cũ không có giá trị |
 | Lần trước chưa xong | `skipped`, không chạy chồng |
-| App tắt giữa lần chạy | `Scheduler.start()` đánh dấu lần đó `interrupted`. Phiên CTO dở vẫn resume được bình thường (`01`) |
+| App tắt giữa lần chạy | `Scheduler.start()` đánh dấu lần đó `interrupted`. Phiên CTO vẫn resume được bình thường (`01`) |
 | Provider chưa cấu hình | `failed` với lỗi provider, không gọi model |
 | Nhân viên đã nghỉ | `failed` ("employee … no longer exists") |
 | Thiếu tool bắt buộc | `blocked`, **không gọi model** (xem dưới) |

@@ -102,11 +102,15 @@ test("cron: fields, steps, ranges, names, aliases, dom/dow OR, errors", () => {
   assert.throws(() => nextRun("0 0 31 2 *", from), /never matches/)
 })
 
-test("schedule: CTO creates a nightly job; at 02:00 a new CTO session hands it to the researcher, then stores the report in knowledge", async () => {
+test("schedule: CTO creates a nightly job; at 02:00 it runs in the CTO's one session, the researcher's one session does the work, the report goes to knowledge", async () => {
   const provider = replying((req) => {
     const all = textOf(req)
-    // Phiên CEO: CTO tạo lịch.
-    if (all.includes("every night at 2")) {
+    // Cùng một phiên CTO: chỉ xét phần từ tin nhắn cuối của người (CEO / scheduler / báo cáo) trở đi.
+    let lastHuman = req.messages.length - 1
+    while (lastHuman > 0 && !(req.messages[lastHuman]!.role === "user" && !req.messages[lastHuman]!.parts.some((p) => p.type === "tool-result"))) lastHuman--
+    const recent = textOf({ ...req, messages: req.messages.slice(lastHuman) })
+    // CEO: CTO tạo lịch.
+    if (recent.includes("every night at 2")) {
       if (req.messages.at(-1)!.parts.some((p) => p.type === "tool-result")) return text("Scheduled.")
       return [
         {
@@ -123,14 +127,14 @@ test("schedule: CTO creates a nightly job; at 02:00 a new CTO session hands it t
     // Phiên CTO do scheduler mở: nhận ghi chú + báo cáo → lưu tri thức.
     assert.ok(!req.tools.some((t) => t.name === "question"), "nobody can answer questions during a scheduled run")
     assert.match(all, /\[Scheduled job\] "Nightly reading"/)
-    assert.match(all, /<subagent [^>]*agent="researcher" status="completed"[\s\S]*Fact A/)
+    assert.match(recent, /<subagent [^>]*agent="researcher" status="completed"[\s\S]*Fact A/)
     if (!req.messages.at(-1)!.parts.some((p) => p.type === "tool-result"))
       return [{ type: "tool-call", callID: "k1", name: "knowledge", args: { action: "save", path: "market-notes", content: "# Market notes\n- Fact A" } }, finish("tool-calls")]
     return text("Learned 2 facts, saved to knowledge/market-notes.md.")
   })
   const { harness, scheduler, docs, setNow, cleanup } = await setup(provider)
   try {
-    const ceo = await harness.createSession({ agent: "cto" })
+    const ceo = await harness.sessionFor("cto")
     assert.equal((await harness.send(ceo.session.id, "have the researcher read the news every night at 2")).tag, "completed")
     const [s] = scheduler.list()
     assert.ok(s)
@@ -156,12 +160,13 @@ test("schedule: CTO creates a nightly job; at 02:00 a new CTO session hands it t
     assert.equal(after.nextRunAt, at(2026, 11, 8, 2, 0))
     assert.match(docs.read("knowledge/market-notes.md")!, /Fact A/)
 
-    const lead = harness.get(run!.sessionID!)
-    assert.equal(lead.session.parentID, undefined, "scheduled CTO session is a root session the CEO can open")
-    assert.match(lead.session.title, /Nightly reading/)
+    assert.equal(run!.sessionID, ceo.session.id, "the run uses the CTO's one session, not a new one")
     const worker = harness.get(run!.workerSessionID!)
-    assert.equal(worker.session.parentID, lead.session.id)
+    assert.equal(worker.session.id, (await harness.sessionFor("researcher")).session.id)
     assert.equal(worker.messages[0]!.from, "scheduler")
+    assert.equal((await harness.store.listSessions()).length, 2, "one session per agent")
+    // Lần chạy xong → CEO hỏi được lại (question trở lại).
+    assert.ok(!ceo.unattended)
   } finally {
     await cleanup()
   }

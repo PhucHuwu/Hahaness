@@ -209,11 +209,14 @@ test("results: deliverables and drafts are listed, viewed, downloaded and delete
   assert.equal(app.docs.has("deliverables/Kế hoạch Q1.md"), false)
 })
 
-test("employee chat + conversations: CEO chats with an employee directly; direct task shows brief and report in the timeline", async () => {
-  const { status, data: emp } = await send<{ session: { id: string; agent: string; parentID?: string } }>("POST", "/api/sessions", { agent: "writer" })
+test("one session per agent: opening an agent twice returns the same session; direct task goes into the employee's session; timeline shows brief and report", async () => {
+  const { status, data: emp } = await send<{ session: { id: string; agent: string; parentID?: string }; home: boolean }>("POST", "/api/sessions", { agent: "writer" })
   assert.equal(status, 200)
   assert.equal(emp.session.agent, "writer")
   assert.equal(emp.session.parentID, undefined)
+  assert.equal(emp.home, true)
+  const again = await send<{ session: { id: string } }>("POST", "/api/sessions", { agent: "writer" })
+  assert.equal(again.data.session.id, emp.session.id, "no second session for the same employee")
   const live = app.harness.get(emp.session.id)
   assert.ok(!app.tools.snapshot(live.ruleset).tools.some((t) => t.name === "delegate" || t.name === "hire"))
   const empDone = waitEvent((ev) => ev.type === "turn" && ev.sessionID === emp.session.id && ev.running === false)
@@ -223,16 +226,19 @@ test("employee chat + conversations: CEO chats with an employee directly; direct
   assert.equal(bad.status, 400)
 
   const { data: cto } = await send<{ session: { id: string } }>("POST", "/api/sessions", { agent: "cto" })
-  const childDone = waitEvent((ev) => ev.type === "turn" && ev.running === false && ev.sessionID !== cto.session.id && ev.sessionID !== emp.session.id)
+  const before = (await get<unknown[]>("/api/sessions")).length
+  const workDone = waitEvent((ev) => ev.type === "turn" && ev.running === false && ev.sessionID === emp.session.id)
   const d = await send<{ sessionID: string }>("POST", `/api/sessions/${cto.session.id}/direct`, { agent: "writer", task: "viết tiêu đề" })
-  await childDone
-  const items = await get<Array<{ kind: string; from: string; to: string; sessionID: string; text: string }>>(`/api/conversations?root=${cto.session.id}`)
-  assert.deepEqual(items.map((i) => [i.kind, i.from, i.to]), [["brief", "ceo", "writer"], ["report", "writer", "cto"]])
-  assert.equal(items[0]!.sessionID, d.data.sessionID)
-  assert.match(items[0]!.text, /^viết tiêu đề/)
+  assert.equal(d.data.sessionID, emp.session.id, "the task lands in the writer's one session")
+  await workDone
+  assert.equal((await get<unknown[]>("/api/sessions")).length, before, "delegating does not create sessions")
+  const items = await get<Array<{ kind: string; from: string; to: string; sessionID: string; text: string }>>("/api/conversations")
+  assert.deepEqual(items.map((i) => [i.kind, i.from, i.to]).slice(-2), [["brief", "ceo", "writer"], ["report", "writer", "cto"]])
+  assert.equal(items.at(-2)!.sessionID, emp.session.id)
+  assert.match(items.at(-2)!.text, /^viết tiêu đề/)
 })
 
-test("schedules: create, validate, run now (CTO session opens and finishes), pause, delete", async () => {
+test("schedules: create, validate, run now (runs in the CTO's one session), pause, delete", async () => {
   const bad = await send<{ error: string }>("POST", "/api/schedules", { title: "x", agent: "researcher", cron: "every night", task: { goal: "g" } })
   assert.equal(bad.status, 400)
   assert.match(bad.data.error, /5 fields/)
@@ -254,8 +260,9 @@ test("schedules: create, validate, run now (CTO session opens and finishes), pau
   assert.equal(detail.schedule.lastStatus, "completed")
   assert.equal(detail.schedule.lastSessionID, run.data.sessionID)
   assert.deepEqual(detail.runs.map((r) => [r.reason, r.status]), [["manual", "completed"]])
-  const sessions = await get<Array<{ session: { id: string; agent: string; parentID?: string } }>>("/api/sessions")
-  assert.ok(sessions.some((x) => x.session.id === run.data.sessionID && x.session.agent === "cto" && !x.session.parentID))
+  const sessions = await get<Array<{ session: { id: string; agent: string }; home: boolean }>>("/api/sessions")
+  assert.ok(sessions.some((x) => x.session.id === run.data.sessionID && x.session.agent === "cto" && x.home))
+  assert.equal(sessions.filter((x) => x.session.agent === "cto").length, 1, "no extra CTO session for the run")
 
   const paused = await send<{ enabled: boolean; nextRunAt?: number }>("PUT", `/api/schedules/${s.id}`, { enabled: false })
   assert.equal(paused.data.enabled, false)

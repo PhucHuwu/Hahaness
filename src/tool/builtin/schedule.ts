@@ -23,12 +23,12 @@ function renderRun(r: ScheduleRun) {
 
 /**
  * Việc định kỳ của công ty. CEO nói "mỗi 2h sáng cho researcher đọc tin…" → CTO tạo lịch;
- * tới giờ harness tự mở phiên CTO mới, giao việc, CTO xử lý báo cáo theo `follow_up`.
+ * tới giờ harness ghi chú vào phiên của CTO, giao việc, CTO xử lý báo cáo theo `follow_up`.
  */
 export function scheduleTool(scheduler: Scheduler) {
   return define({
     name: "schedule",
-    description: `Recurring jobs: at set times the company wakes up by itself, gives a task to an employee (or to you), and you handle their report in a new conversation the CEO can read later.
+    description: `Recurring jobs: at set times the company wakes up by itself, gives a task to an employee (or to you), and you handle their report here when it arrives; the CEO reads the outcome later.
 - list: all schedules with next run and last result.
 - create: title, agent (employee id, or your own id to do it yourself), cron, task (a brief like delegate's), optional follow_up (what you do with the report; default: store what is new with \`knowledge\` and summarise), optional tools (tool names the job cannot work without, e.g. ["facebook_*"]; runs are blocked, not wasted, until they exist).
 - update: change any field (id + fields). enable / disable: resume or pause. remove: delete.
@@ -85,7 +85,7 @@ Write the task so it stands alone: the employee sees only the brief, every time.
           case "run_now": {
             const r = await scheduler.runNow(input.id)
             if (r.status !== "running") return { output: `Could not start: ${STATUS[r.status] ?? r.status}${r.error ? ` — ${r.error}` : ""}`, isError: true }
-            return { output: `Started in a separate conversation (${r.sessionID}). The result shows up there and in the schedule's history; do not wait for it here.` }
+            return { output: `Started. The report arrives later as a message in this conversation and is logged in the schedule's history; do not wait for it.` }
           }
           case "history":
             return { output: scheduler.runs(input.id, 10).map(renderRun).join("\n") || "(no runs yet)" }

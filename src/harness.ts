@@ -20,7 +20,7 @@ import { changed, environment, removed, updateNotice, type InstructionSource } f
 import * as workspace from "./context/workspace.ts"
 import { ceiling, estimateMessage } from "./context/budget.ts"
 import { AskGate, type AskHandler } from "./permission/ask.ts"
-import { denied, evaluate, inherit, type Ruleset } from "./permission/ruleset.ts"
+import { denied, evaluate, type Ruleset } from "./permission/ruleset.ts"
 import type { ProviderRegistry } from "./provider/registry.ts"
 import type { ProviderClient } from "./provider/types.ts"
 import type { ToolRegistry } from "./tool/registry.ts"
@@ -68,26 +68,48 @@ interface Live {
   knownAt: number
   ruleset: Ruleset
   saved: Set<string>
-  depth: number
   abort: AbortController
   running?: Promise<Outcome>
   /** Lỗi của lượt gần nhất (xóa khi lượt mới bắt đầu) để UI hiện lại sau khi tải lại trang. */
   lastError?: string
-  /** Tool riêng cho session (vd delegate bind vào parent). */
-  extraTools: Tool[]
   /** Model đang dùng nếu đã chuyển sang dự phòng (chỉ trong bộ nhớ; restart thì thử lại model chính). */
   activeModel?: string
-  /**
-   * Phiên con: người giao việc. `waiting` = nhân viên đã hỏi (`ask_lead`) và đang chờ trả lời;
-   * lượt kế tiếp kết thúc thì báo cáo lại lên phiên cha (spawn ban đầu đã trả kết quả rồi).
-   */
-  lead?: { parentID: string; wakeParent: boolean; waiting?: boolean }
+  /** Việc được giao đang làm (mỗi phiên làm một việc một lúc); `tasks` là việc đang xếp hàng. */
+  task?: Assignment
+  tasks: Assignment[]
+  /** > 0: đang chạy việc định kỳ, không ai ngồi trả lời → tắt `question` cho các lượt này. */
+  unattended: number
+}
+
+/**
+ * Một lần giao việc vào phiên duy nhất của nhân viên. Không lưu xuống DB: restart thì chỉ
+ * khôi phục trường hợp nhân viên đang chờ câu trả lời (`ask_lead`), xem `resume`.
+ */
+interface Assignment {
+  /** Agent nhận báo cáo; báo cáo vào phiên duy nhất của agent đó. */
+  lead: string
+  /** Người giao hiển thị trên UI: id agent, `ceo` hoặc `scheduler`. */
+  from: string
+  wakeLead: boolean
+  brief: Message
+  /** 1 = CTO giao; nhân viên orchestrator giao tiếp thì +1 (giới hạn `maxDepth`). */
+  depth: number
+  /** Nhân viên đã hỏi (`ask_lead`) và đang chờ; lượt kế tiếp kết thúc thì báo lại. */
+  waiting?: boolean
+  /** Đã trả kết quả đầu tiên (tool result của delegate hoặc tin nhắn nền); lần sau luôn vào inbox người giao. */
+  reported?: boolean
+  /** Kết quả đầu tiên. */
+  resolve: (entry: ResultEntry) => void
 }
 
 export class Harness {
   readonly store: SessionStore
   readonly askGate: AskGate
   private live = new Map<string, Live>()
+  private homes = new Map<string, Promise<Live>>()
+  /** agent → id phiên chính, biết đồng bộ (cho `sessionView`). */
+  private homeIDs = new Map<string, string>()
+  /** Việc đã giao nhưng chưa có báo cáo đầu tiên (đang làm hoặc xếp hàng). */
   private activeSubagents = 0
 
   constructor(readonly cfg: HarnessConfig) {
@@ -95,20 +117,38 @@ export class Harness {
     this.askGate = new AskGate(cfg.askHandler)
   }
 
-  async createSession(opts: { agent: string; parentID?: string; title?: string; model?: string; ruleset?: Ruleset; depth?: number; extraTools?: Tool[] }): Promise<Live> {
-    const agent = this.cfg.agents.get(opts.agent)
-    const modelRef = opts.model ?? agent.model[0] ?? this.cfg.defaultModel
-    this.cfg.providers.resolve(modelRef)
-    const session: Session = {
-      id: id("ses"),
-      parentID: opts.parentID,
-      agent: agent.id,
-      model: modelRef,
-      title: opts.title ?? agent.name,
-      createdAt: Date.now(),
+  /**
+   * Phiên duy nhất của agent (1 nhân viên = 1 phiên chat): phiên gốc mới nhất đã lưu, chưa có thì tạo.
+   * Phiên cũ khác (trước khi đổi sang mô hình này) chỉ còn để xem, xem `isHome`.
+   */
+  sessionFor(agentID: string): Promise<Live> {
+    let p = this.homes.get(agentID)
+    if (!p) {
+      p = this.openHome(agentID)
+      this.homes.set(agentID, p)
+      p.catch(() => this.homes.delete(agentID))
     }
+    return p
+  }
+
+  private async openHome(agentID: string): Promise<Live> {
+    const agent = this.cfg.agents.get(agentID)
+    const existing = homeSessions(await this.store.listSessions()).get(agentID)
+    if (existing) {
+      this.homeIDs.set(agentID, existing.id)
+      return this.resume(existing.id)
+    }
+    const modelRef = agent.model[0] ?? this.cfg.defaultModel
+    this.cfg.providers.resolve(modelRef)
+    const session: Session = { id: id("ses"), agent: agent.id, model: modelRef, title: agent.name, createdAt: Date.now() }
     await this.store.createSession(session)
-    return this.activate(session, agent, { ruleset: opts.ruleset, depth: opts.depth, extraTools: opts.extraTools })
+    this.homeIDs.set(agentID, session.id)
+    return this.activate(session, agent)
+  }
+
+  /** Id phiên chính của agent nếu đã biết trong tiến trình này (không đọc DB). */
+  homeOf(agentID: string): string | undefined {
+    return this.homeIDs.get(agentID)
   }
 
   /** Nạp lại phiên từ store (sau khi restart). System prompt được dựng lại từ workspace hiện tại. */
@@ -118,14 +158,21 @@ export class Harness {
     const state = await this.store.load(sessionID)
     if (!state) throw new Error(`no stored session ${sessionID}`)
     const agent = this.cfg.agents.get(state.session.agent)
-    const live = await this.activate(state.session, agent, {})
+    const live = await this.activate(state.session, agent)
     live.messages.push(...state.messages)
     live.usage.push(...state.usage)
     live.compaction = state.compactions.at(-1)
     // System vừa dựng lại từ workspace hiện tại → không cần báo gì cho tới khi tài liệu đổi tiếp.
     live.knownCheckpoint = live.compaction?.id
     // Nhân viên đang chờ câu trả lời lúc restart: trả lời xong vẫn phải báo lại người giao việc.
-    if (state.session.parentID) live.lead = { parentID: state.session.parentID, wakeParent: true, waiting: pendingQuestion(live.messages) !== undefined }
+    if (agent.mode !== "primary" && pendingQuestion(live.messages) !== undefined) {
+      const brief = [...live.messages].reverse().find((m) => m.role === "user" && m.source === "agent" && !!m.from)
+      const from = brief?.from
+      if (brief && from) {
+        const lead = this.cfg.agents.has(from) ? from : (this.cfg.agents.list("primary")[0]?.id ?? "cto")
+        live.task = { lead, from, wakeLead: true, brief, depth: 1, waiting: true, reported: true, resolve: () => {} }
+      }
+    }
     const repaired = await repairDangling({ sessionID, messages: live.messages, store: this.store })
     live.estimate.estimated += fromCheckpoint(live.messages, live.compaction).reduce((n, m) => n + estimateMessage(m), 0)
     if (state.staleClaim || repaired > 0) {
@@ -135,7 +182,7 @@ export class Harness {
     return live
   }
 
-  private async activate(session: Session, agent: AgentDef, opts: { ruleset?: Ruleset; depth?: number; extraTools?: Tool[] }): Promise<Live> {
+  private async activate(session: Session, agent: AgentDef): Promise<Live> {
     const instructions = await this.contextSources(agent)
     const skills = instructions.find((s) => s.id === SKILLS_SOURCE)
     const live: Live = {
@@ -149,11 +196,11 @@ export class Harness {
       instructions,
       known: instructions,
       knownAt: Date.now(),
-      ruleset: [...(this.cfg.permissions ?? []), ...agent.permissions, ...(opts.ruleset ?? []), ...employeeRules(agent, session)],
+      ruleset: [...(this.cfg.permissions ?? []), ...agent.permissions, ...employeeRules(agent)],
       saved: new Set(),
-      depth: opts.depth ?? 0,
       abort: new AbortController(),
-      extraTools: opts.extraTools ?? [],
+      tasks: [],
+      unattended: 0,
     }
     live.estimate.estimated = live.system.reduce((n, s) => n + Math.ceil(s.length / 4), 0)
     this.live.set(session.id, live)
@@ -280,23 +327,44 @@ export class Harness {
         live.running = undefined
         if (outcome.tag === "failed") live.lastError = outcome.error.message
         if (live.inbox.size > 0) return this.wake(live)
-        if (live.lead?.waiting) this.reportToLead(live, outcome)
+        this.settle(live, outcome)
         this.cfg.events.onTurnEnd?.(live.session.id, outcome)
+        this.next(live)
         return outcome
       })
       .catch((e) => {
         live.running = undefined
         const outcome = { tag: "failed", error: e as Error } as Outcome
         live.lastError = (e as Error).message
+        this.settle(live, outcome)
         this.cfg.events.onTurnEnd?.(live.session.id, outcome)
+        this.next(live)
         return outcome
       })
     return live.running
   }
 
-  /** `ask_lead` chỉ có nghĩa khi có người giao việc. Không lọc bằng rule deny: phiên con thừa kế mọi deny của cha. */
+  /**
+   * Tool theo tình huống của lượt (ruleset cố định cả phiên, nhưng phiên dùng chung cho nhiều việc):
+   * `ask_lead` chỉ khi đang làm việc được giao; `question` không có khi đang làm việc được giao
+   * (hỏi người giao bằng `ask_lead`) hay khi chạy định kỳ (không ai ngồi trả lời).
+   */
   private toolsFor(live: Live): Tool[] {
-    return [...this.cfg.tools.snapshot(live.ruleset).tools.filter((t) => t.name !== "ask_lead" || !!live.session.parentID), ...live.extraTools]
+    return this.cfg.tools.snapshot(live.ruleset).tools.filter((t) => {
+      if (t.name === "ask_lead") return !!live.task
+      if (t.name === "question") return !live.task && live.unattended === 0
+      return true
+    })
+  }
+
+  /** Đánh dấu phiên đang chạy việc không người trực (lịch); trả hàm để gỡ. */
+  unattended(live: Live): () => void {
+    live.unattended++
+    let done = false
+    return () => {
+      if (!done) live.unattended--
+      done = true
+    }
   }
 
   /**
@@ -329,7 +397,8 @@ export class Harness {
         contextWindow = this.cfg.providers.resolve(model).info.contextWindow
       } catch {}
     }
-    const children = await this.childUsage(sessionID)
+    const agent = live?.session.agent ?? (await this.store.listSessions()).find((s) => s.id === sessionID)?.agent
+    const children = this.cfg.agents.has(agent ?? "") && this.cfg.agents.get(agent!).mode === "primary" ? [...(await this.staffUsage()), ...(await this.childUsage(sessionID))] : await this.childUsage(sessionID)
     return {
       sessionID,
       model,
@@ -343,6 +412,21 @@ export class Harness {
     }
   }
 
+  /** Phiên của từng nhân viên (CTO giao việc vào đó), gồm cả phiên con cũ trước khi đổi sang 1 phiên/agent. */
+  private async staffUsage(): Promise<UsageReport["children"]> {
+    const stored = await this.store.listSessions()
+    for (const l of this.list()) if (!stored.some((s) => s.id === l.session.id)) stored.push(l.session)
+    const out: UsageReport["children"] = []
+    for (const s of stored) {
+      if (s.parentID || (this.cfg.agents.has(s.agent) && this.cfg.agents.get(s.agent).mode === "primary")) continue
+      const own = summarizeUsage(this.live.get(s.id)?.usage ?? (await this.store.usage(s.id))).total
+      if (own.calls === 0) continue
+      out.push({ sessionID: s.id, agent: s.agent, title: s.title, total: own })
+    }
+    return out
+  }
+
+  /** Phiên con kiểu cũ (có `parentID`). */
   private async childUsage(parentID: string): Promise<UsageReport["children"]> {
     const stored = await this.store.listSessions()
     const ids = new Set([...stored.filter((s) => s.parentID === parentID).map((s) => s.id), ...this.list().filter((l) => l.session.parentID === parentID).map((l) => l.session.id)])
@@ -403,115 +487,155 @@ export class Harness {
   }
 
   /**
-   * Spawn child session. Trả ResultEntry (foreground) hoặc id (background).
-   * `wakeParent: false` (direct mode từ UI): kết quả vẫn vào inbox CTO nhưng
-   * không đánh thức — CTO thấy ở lượt sau thay vì tự trả lời CEO.
+   * Giao việc cho nhân viên, vào phiên duy nhất của họ (1 nhân viên = 1 phiên chat).
+   * Nhân viên đang làm việc khác → việc mới xếp hàng, làm lần lượt.
+   * Foreground trả ResultEntry; background trả ngay, báo cáo về inbox phiên người giao.
+   * `wakeLead: false` (direct mode từ UI): báo cáo vẫn vào inbox CTO nhưng không đánh thức,
+   * CTO thấy ở lượt sau thay vì tự trả lời CEO.
    */
   async spawn(
-    parentID: string,
+    leadSessionID: string,
     opts: {
       agent: string
       brief: Brief
       context?: "isolated" | "fork"
       background?: boolean
-      wakeParent?: boolean
-      model?: string
+      wakeLead?: boolean
+      /** Người giao hiển thị (mặc định agent của phiên giao): `ceo`, `scheduler`… */
       from?: string
       signal?: AbortSignal
-      /** Background: gọi sau khi báo cáo đã vào inbox phiên cha (và phiên cha đã được đánh thức nếu có). */
+      /** Background: gọi sau khi báo cáo đầu tiên đã vào inbox người giao (và đã đánh thức nếu có). */
       onReport?: (entry: ResultEntry) => void
     },
-  ) {
-    const parent = this.get(parentID)
+  ): Promise<ResultEntry | { sessionID: string; status: "running" | "queued" }> {
+    const lead = this.get(leadSessionID)
+    const depth = (lead.task?.depth ?? 0) + 1
     const maxDepth = this.cfg.maxDepth ?? 1
-    if (parent.depth >= maxDepth) throw new Error(`delegate: max depth ${maxDepth} reached`)
+    if (lead.agent.mode !== "primary" && !lead.task) throw new Error("delegate: only work assigned to you can be passed on")
+    if (depth > maxDepth) throw new Error(`delegate: max depth ${maxDepth} reached`)
     const agentDef = this.cfg.agents.get(opts.agent)
     if (agentDef.mode === "primary") throw new Error(`delegate: ${opts.agent} is a primary agent`)
-    if (this.activeSubagents >= (this.cfg.maxConcurrentSubagents ?? 4)) throw new Error("delegate: too many concurrent subagents")
+    if (agentDef.id === lead.agent.id) throw new Error("delegate: cannot assign work to yourself")
+    if (this.activeSubagents >= (this.cfg.maxConcurrentSubagents ?? 4)) throw new Error("delegate: too many assignments in progress")
 
-    const childRules = inherit(parent.ruleset, [
-      ...MANAGEMENT_ACTIONS.filter((a) => a !== "delegate").map((action) => ({ action, resource: "*", effect: "deny" as const })),
-      ...(agentDef.role === "leaf" ? [{ action: "delegate", resource: "*", effect: "deny" } as const] : []),
-    ])
-    const child = await this.createSession({
-      agent: opts.agent,
-      parentID,
-      title: opts.brief.goal.slice(0, 60),
-      model: opts.model,
-      ruleset: childRules,
-      depth: parent.depth + 1,
-    })
-    child.lead = { parentID, wakeParent: opts.wakeParent !== false }
+    const worker = await this.sessionFor(opts.agent)
+    const from = opts.from ?? lead.agent.id
     const context = opts.context ?? agentDef.context
-    const forked = context === "fork" ? forkContext(parent) : ""
-    child.inbox.push("queue", {
+    const forked = context === "fork" ? forkContext(lead) : ""
+    const who = from === "ceo" ? "the CEO" : from === "scheduler" ? "the scheduler (a recurring job)" : from
+    const brief: Message = {
       id: id("msg"),
       role: "user",
       source: "agent",
-      from: opts.from ?? parent.agent.id,
+      from,
       createdAt: Date.now(),
-      parts: [{ type: "text", text: `You are a subagent spawned by another session.${saveHint(child.ruleset)}\n${forked}\n${renderBrief(opts.brief)}` }],
-    })
-
-    // Foreground: parent đang chờ trong tool call → dừng parent (hoặc tool timeout) thì dừng luôn child.
-    // Background chạy độc lập; dừng bằng delegate(stop) hoặc nút Dừng ở phiên nhân viên.
-    const stopChild = () => child.abort.abort("parent stopped")
-    const link = !opts.background ? opts.signal : undefined
+      parts: [{ type: "text", text: `New task from ${who}. Your final message is your report to them.${saveHint(worker.ruleset)}\n${forked}\n${renderBrief(opts.brief)}` }],
+    }
+    let resolve!: (e: ResultEntry) => void
+    const first = new Promise<ResultEntry>((r) => (resolve = r))
+    const task: Assignment = { lead: lead.agent.id, from, wakeLead: opts.wakeLead !== false, brief, depth, resolve }
     this.activeSubagents++
-    const run = this.wake(child)
-      .then((outcome) => {
-        const entry = this.result(child, outcome)
-        if (entry.status === "needs_input") child.lead!.waiting = true
-        return entry
-      })
-      .finally(() => {
-        this.activeSubagents--
-        link?.removeEventListener("abort", stopChild)
-      })
-    if (link?.aborted) stopChild()
-    else link?.addEventListener("abort", stopChild, { once: true })
+
+    // Foreground: người giao đang chờ trong tool call → họ dừng (hoặc tool timeout) thì dừng luôn việc này.
+    // Background chạy độc lập; dừng bằng delegate(stop) hoặc nút Dừng ở phiên nhân viên.
+    const link = !opts.background ? opts.signal : undefined
+    const cancel = () => {
+      if (worker.task === task) worker.abort.abort("lead stopped")
+      else if (worker.tasks.includes(task)) {
+        worker.tasks = worker.tasks.filter((t) => t !== task)
+        this.deliver(task, { ...emptyResult(worker), status: "stopped", exitReason: "cancelled before it started" })
+      }
+    }
+    if (link?.aborted) {
+      this.activeSubagents--
+      throw new Error("delegate: cancelled")
+    }
+    link?.addEventListener("abort", cancel, { once: true })
+    void first.finally(() => link?.removeEventListener("abort", cancel))
+
+    const queued = !!worker.task
+    if (queued) worker.tasks.push(task)
+    else this.begin(worker, task)
 
     if (opts.background) {
-      void run.then((entry) => {
-        parent.inbox.push("queue", {
-          id: id("msg"),
-          role: "user",
-          source: "subagent",
-          from: child.agent.id,
-          createdAt: Date.now(),
-          parts: [{ type: "text", text: renderResult(entry) }],
-        })
-        this.cfg.events.onNotice?.(parentID, `subagent ${child.session.id} finished (${entry.status})`)
-        if (!parent.running && opts.wakeParent !== false) void this.wake(parent)
+      void first.then((entry) => {
+        this.report(task, entry)
         opts.onReport?.(entry)
       })
-      return { sessionID: child.session.id, status: "running" as const }
+      return { sessionID: worker.session.id, status: queued ? "queued" : "running" }
     }
-    return run
+    return first
   }
 
-  /** Nhân viên đã được trả lời và làm xong lượt tiếp theo → gửi kết quả mới lên người giao việc. */
-  private reportToLead(child: Live, outcome: Outcome) {
-    const lead = child.lead!
-    lead.waiting = false
-    if (!this.live.has(lead.parentID)) return
-    const parent = this.get(lead.parentID)
-    const entry = this.result(child, outcome)
-    if (entry.status === "needs_input") lead.waiting = true
-    parent.inbox.push("queue", { id: id("msg"), role: "user", source: "subagent", from: child.agent.id, createdAt: Date.now(), parts: [{ type: "text", text: renderResult(entry) }] })
-    this.cfg.events.onNotice?.(parent.session.id, `subagent ${child.session.id} reported (${entry.status})`)
-    if (!parent.running && lead.wakeParent) void this.wake(parent)
+  /** Nhân viên đang làm gì (cho `delegate list` và UI). */
+  work(live: Live): { status: "working" | "waiting" | "idle"; goal?: string; from?: string; queued: number } {
+    const goal = live.task && /<goal>([\s\S]*?)<\/goal>/.exec(textOf(live.task.brief))?.[1]
+    return {
+      status: live.task?.waiting ? "waiting" : live.task || live.running ? "working" : "idle",
+      goal: goal || undefined,
+      from: live.task?.from,
+      queued: live.tasks.length,
+    }
   }
 
-  private result(child: Live, outcome: Outcome): ResultEntry {
-    const asked = outcome.tag === "completed" ? pendingQuestion(child.messages) : undefined
-    const last = [...child.messages].reverse().find((m) => m.role === "assistant" && m.parts.some((p) => p.type === "text"))
+  private begin(live: Live, task: Assignment) {
+    live.task = task
+    live.inbox.push("queue", task.brief)
+    void this.wake(live)
+  }
+
+  /** Lượt vừa xong mà inbox rỗng: chạy việc kế tiếp trong hàng (nếu đã xong việc hiện tại). */
+  private next(live: Live) {
+    if (live.task || live.running || live.tasks.length === 0) return
+    this.begin(live, live.tasks.shift()!)
+  }
+
+  /**
+   * Lượt kết thúc khi đang làm việc được giao → báo cáo. Hỏi lại (`ask_lead`) thì việc vẫn mở,
+   * chờ câu trả lời; xong/lỗi/dừng thì đóng việc.
+   */
+  private settle(live: Live, outcome: Outcome) {
+    const task = live.task
+    if (!task) return
+    const entry = this.result(live, task, outcome)
+    task.waiting = entry.status === "needs_input"
+    if (!task.waiting) live.task = undefined
+    this.deliver(task, entry)
+  }
+
+  /** Kết quả đầu tiên trả cho người giao (tool result / tin nhắn nền); các lần sau (sau khi hỏi lại) vào inbox họ. */
+  private deliver(task: Assignment, entry: ResultEntry) {
+    if (task.reported) return this.report(task, entry)
+    task.reported = true
+    this.activeSubagents--
+    task.resolve(entry)
+  }
+
+  /** Đồng bộ khi phiên người giao đang sống: `onReport` (scheduler) đánh thức ngay sau đó phải thấy báo cáo. */
+  private report(task: Assignment, entry: ResultEntry) {
+    const post = (lead: Live) => {
+      lead.inbox.push("queue", { id: id("msg"), role: "user", source: "subagent", from: entry.agent, createdAt: Date.now(), parts: [{ type: "text", text: renderResult(entry) }] })
+      this.cfg.events.onNotice?.(lead.session.id, `${entry.agent} reported (${entry.status})`)
+      if (!lead.running && task.wakeLead) void this.wake(lead)
+    }
+    const home = this.homeIDs.get(task.lead)
+    const live = home ? this.live.get(home) : undefined
+    if (live) return post(live)
+    void this.sessionFor(task.lead).then(post, () => {})
+  }
+
+  /** Chỉ tính phần phiên từ brief của việc này trở đi (phiên nhân viên chứa nhiều việc). */
+  private result(live: Live, task: Assignment, outcome: Outcome): ResultEntry {
+    const at = live.messages.findIndex((m) => m.id === task.brief.id)
+    const messages = at >= 0 ? live.messages.slice(at) : []
+    const asked = outcome.tag === "completed" ? pendingQuestion(messages) : undefined
+    const last = [...messages].reverse().find((m) => m.role === "assistant" && m.parts.some((p) => p.type === "text"))
     const summary = last?.parts.filter((p) => p.type === "text").map((p) => p.text).join("") ?? ""
     // Chỉ tính write thành công; write lỗi báo riêng để người giao việc không chuyển lời khẳng định sai.
     const files = new Set<string>()
     const failed = new Map<string, string>()
     const writes = new Map<string, string>()
-    for (const m of child.messages)
+    for (const m of messages)
       for (const p of m.parts) {
         if (p.type === "tool-call" && p.name === "write") writes.set(p.callID, String((p.args as any)?.path ?? ""))
         if (p.type === "tool-result" && writes.has(p.callID)) {
@@ -524,34 +648,47 @@ export class Harness {
         }
       }
     for (const f of files) failed.delete(f)
-    const steps = child.messages.filter((m) => m.role === "assistant").length
     return {
-      sessionID: child.session.id,
-      agent: child.agent.id,
+      ...emptyResult(live),
       status: asked ? "needs_input" : outcome.tag === "completed" ? "completed" : outcome.tag === "interrupted" ? "stopped" : "failed",
       exitReason: asked ? "needs_input" : outcome.tag === "failed" ? `error: ${outcome.error.message}` : outcome.tag,
       summary: (asked ?? summary).slice(0, 8000),
       filesTouched: [...files].filter(Boolean),
       failedWrites: [...failed].map(([path, error]) => ({ path, error })),
-      usage: { steps, inputTokens: child.estimate.measured, outputTokens: child.messages.reduce((n, m) => (m.role === "assistant" ? n + estimateMessage(m) : n), 0) },
+      usage: {
+        steps: messages.filter((m) => m.role === "assistant").length,
+        inputTokens: live.estimate.measured,
+        outputTokens: messages.reduce((n, m) => (m.role === "assistant" ? n + estimateMessage(m) : n), 0),
+      },
     }
   }
 }
 
+function emptyResult(live: Live): ResultEntry {
+  return { sessionID: live.session.id, agent: live.agent.id, status: "stopped", exitReason: "", summary: "", filesTouched: [], failedWrites: [], usage: { steps: 0, inputTokens: 0, outputTokens: 0 } }
+}
+
+const textOf = (m: Message) => m.parts.map((p) => (p.type === "text" ? p.text : "")).join("")
+
 /**
- * Nhân viên (mode khác primary) không bao giờ có tool quản lý, kể cả khi CEO chat thẳng
- * (phiên gốc) hay khi phiên con được resume sau restart (lúc đó rule của spawn không còn).
- * `question` chỉ cho phép ở phiên gốc vì CEO đang ngồi đó; `delegate` chỉ cho
- * orchestrator được giao việc từ phiên cha.
+ * Phiên chính của mỗi agent: phiên gốc (không `parentID`) mới nhất. Phiên con kiểu cũ và
+ * phiên gốc cũ hơn là lịch sử từ trước khi chuyển sang 1 phiên/agent, chỉ để xem.
  */
-function employeeRules(agent: AgentDef, session: Session): Ruleset {
+export function homeSessions(sessions: Session[]): Map<string, Session> {
+  const out = new Map<string, Session>()
+  for (const s of [...sessions].sort((a, b) => b.createdAt - a.createdAt)) if (!s.parentID && !out.has(s.agent)) out.set(s.agent, s)
+  return out
+}
+
+/**
+ * Nhân viên (mode khác primary) không bao giờ có tool quản lý. `delegate` chỉ cho orchestrator,
+ * và chỉ dùng được khi đang làm việc được giao (`spawn` kiểm tra). `question` để nguyên vì CEO
+ * chat thẳng trong cùng phiên; khi đang làm việc được giao thì `toolsFor` ẩn nó (dùng `ask_lead`).
+ */
+function employeeRules(agent: AgentDef): Ruleset {
   if (agent.mode === "primary") return []
   const deny = (action: string) => ({ action, resource: "*", effect: "deny" as const })
-  return MANAGEMENT_ACTIONS.filter((a) => {
-    if (a === "question") return !!session.parentID
-    if (a === "delegate") return !session.parentID || agent.role === "leaf"
-    return true
-  }).map(deny)
+  return MANAGEMENT_ACTIONS.filter((a) => a !== "question" && (a !== "delegate" || agent.role === "leaf")).map(deny)
 }
 
 /** Cho nhân viên biết chỗ được lưu, để không thử `deliverables/` rồi bị từ chối. */
@@ -607,7 +744,7 @@ export function renderResult(r: ResultEntry) {
   const files = (r.filesTouched.length ? `\nfiles saved: ${r.filesTouched.join(", ")}` : "") + failed
   const ask =
     r.status === "needs_input"
-      ? `\n\n${r.agent} is waiting for your answer. Reply with delegate(action: "steer", sessionID: "${r.sessionID}", message: …); if only the CEO can decide, ask them first. Their next report arrives as a message.`
+      ? `\n\n${r.agent} is waiting for your answer. Reply with delegate(action: "steer", agent: "${r.agent}", message: …); if only the CEO can decide, ask them first. Their next report arrives as a message.`
       : ""
   return `<subagent sessionID="${r.sessionID}" agent="${r.agent}" status="${r.status}" steps="${r.usage.steps}">\n${r.summary || "(no summary)"}${files}${ask}\n</subagent>`
 }

@@ -7,7 +7,7 @@ import { renderBrief, type Brief, type Harness, type ResultEntry } from "../harn
 import { formatLocal, nextRun, parseCron, timezone } from "./cron.ts"
 
 /**
- * Việc định kỳ: tới giờ thì harness tự mở một phiên CTO mới, giao `task` cho `agent`
+ * Việc định kỳ: tới giờ harness ghi chú vào phiên duy nhất của CTO, giao `task` cho `agent`
  * (hoặc cho chính CTO), báo cáo về CTO để xử lý theo `followUp`. Xem docs/architecture/09-schedules.md.
  */
 export interface Schedule {
@@ -280,9 +280,15 @@ export class Scheduler {
     }
     try {
       const primary = this.opts.agents.list("primary")[0]?.id ?? "cto"
-      // Không ai ngồi trả lời lúc chạy định kỳ → bỏ `question` (nếu không model sẽ treo tới timeout).
-      const lead = await harness.createSession({ agent: primary, title: `Định kỳ · ${s.title}`, ruleset: [{ action: "question", resource: "*", effect: "deny" }] })
+      // Chạy trong phiên duy nhất của CTO (1 agent = 1 phiên chat).
+      const lead = await harness.sessionFor(primary)
       run.sessionID = lead.session.id
+      // Không ai ngồi trả lời lúc chạy định kỳ → ẩn `question` tới khi lần chạy xong (nếu không model sẽ treo tới timeout).
+      const attended = harness.unattended(lead)
+      const close = (status: RunStatus, error?: string) => {
+        attended()
+        return end(status, error)
+      }
       const late = run.startedAt - dueAt > LATE_MS
       const self = this.opts.agents.get(s.agent).mode === "primary"
       const note: Message = {
@@ -302,8 +308,8 @@ export class Scheduler {
       if (self) {
         started()
         void harness.wake(lead).then(
-          (o: Outcome) => end(outcomeStatus(o), o.tag === "failed" ? o.error.message : undefined),
-          (e: Error) => end("failed", (e as Error).message),
+          (o: Outcome) => close(outcomeStatus(o), o.tag === "failed" ? o.error.message : undefined),
+          (e: Error) => close("failed", (e as Error).message),
         )
         return run
       }
@@ -315,9 +321,12 @@ export class Scheduler {
         // Lần chạy xong khi CTO đã xử lý báo cáo (lưu tri thức, tóm tắt), không chỉ khi nhân viên nộp bài.
         onReport: (entry: ResultEntry) =>
           void harness.wake(lead).then(
-            (o: Outcome) => end(o.tag === "failed" ? "failed" : entry.status, o.tag === "failed" ? o.error.message : entry.status === "failed" ? entry.exitReason : undefined),
-            (e: Error) => end("failed", (e as Error).message),
+            (o: Outcome) => close(o.tag === "failed" ? "failed" : entry.status, o.tag === "failed" ? o.error.message : entry.status === "failed" ? entry.exitReason : undefined),
+            (e: Error) => close("failed", (e as Error).message),
           ),
+      }).catch((e: Error) => {
+        attended()
+        throw e
       })
       run.workerSessionID = r.sessionID
       started()
@@ -345,13 +354,13 @@ function renderNote(s: Schedule, run: ScheduleRun, late: boolean, self: boolean)
   const when = `${formatLocal(run.startedAt)} (${timezone()})`
   const head = [
     `[Scheduled job] "${s.title}" (${s.id}), cron "${s.cron}". This run started ${when}${run.reason === "manual" ? " on request" : ""}${late ? `; it was due ${formatLocal(run.dueAt)} but the app was not running then` : ""}.`,
-    "The harness started this conversation automatically and nobody is reading it live; the CEO sees the outcome later. If something needs the CEO's decision, say so at the top of your final message. If a tool the task needs is missing, say exactly which one instead of improvising.",
+    "The harness posted this automatically and nobody is reading live for this job; the CEO sees the outcome later. If something needs the CEO's decision, say so at the top of your final message. If a tool the task needs is missing, say exactly which one instead of improvising.",
   ]
   if (self) return [...head, "", "Task:", renderBrief(s.task), "", `When done: ${s.followUp ?? DEFAULT_FOLLOW_UP}`].join("\n")
   return [
     ...head,
     "",
-    `${s.agent} has already been given the brief below by the scheduler. Their report arrives as the next message; do not assign it again.`,
+    `${s.agent} has already been given the brief below by the scheduler. Their report arrives later as a message; do not assign it again.`,
     renderBrief(s.task),
     "",
     `When the report arrives: ${s.followUp ?? DEFAULT_FOLLOW_UP}`,

@@ -109,7 +109,7 @@ test("hire: CTO creates a new employee at runtime, persisted, then delegates to 
   ])
   const { harness, db, agents, cleanup } = await setup(provider)
   try {
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     const outcome = await harness.send(main.session.id, "do an SEO audit")
     assert.equal(outcome.tag, "completed")
     assert.ok(agents.has("seo-specialist"))
@@ -141,7 +141,7 @@ test("skills: index in Tier A only when skills exist; `skill` tool loads body; k
     await store.write("weekly-report", "---\nname: Weekly report\ndescription: Use for weekly summaries\n---\nStep one.")
     docs.put("knowledge/brand.md", "# Brand voice\nFriendly.")
     harness.cfg.tools.register(skill(store))
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     const outcome = await harness.send(main.session.id, "weekly report please")
     assert.equal(outcome.tag, "completed")
   } finally {
@@ -160,7 +160,7 @@ test("resume: a stored session is reloaded with its transcript and continues", a
   ])
   const { harness, agents, cleanup } = await setup(provider)
   try {
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     await harness.send(main.session.id, "one")
     const fresh = new Harness({ ...harness.cfg, agents })
     assert.ok(!fresh.has(main.session.id))
@@ -188,7 +188,7 @@ test("loop: tool call then completion, persisted before execute", async () => {
   ])
   const { harness, cleanup } = await setup(provider)
   try {
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     const outcome = await harness.send(main.session.id, "say hi")
     assert.equal(outcome.tag, "completed")
     assert.equal(provider.requests.length, 2)
@@ -212,7 +212,7 @@ test("validation error is returned to the model, not thrown", async () => {
   ])
   const { harness, cleanup } = await setup(provider)
   try {
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     const outcome = await harness.send(main.session.id, "go")
     assert.equal(outcome.tag, "completed")
   } finally {
@@ -238,10 +238,51 @@ test("delegate foreground: child isolated, only ResultEntry returns", async () =
   ])
   const { harness, cleanup } = await setup(provider)
   try {
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     const outcome = await harness.send(main.session.id, "find X")
     assert.equal(outcome.tag, "completed")
     assert.equal(harness.list().length, 2)
+  } finally {
+    await cleanup()
+  }
+})
+
+test("one session per employee: two tasks queue in the same session; each report covers only its own task; restart reuses it", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  const provider: ProviderClient = {
+    info: () => ({ id: "mock", contextWindow: 100_000, maxOutput: 8_000 }),
+    async *stream(req) {
+      const last = req.messages.at(-1)!
+      const text = last.parts.map((p) => (p.type === "text" ? p.text : "")).join("")
+      if (text.includes("<goal>first</goal>")) {
+        await gate
+        yield { type: "text-delta", text: "first done" }
+      } else if (text.includes("<goal>second</goal>")) {
+        assert.ok(req.messages.some((m) => m.parts.some((p) => p.type === "text" && p.text === "first done")), "employee remembers earlier work")
+        yield { type: "text-delta", text: "second done" }
+      } else yield { type: "text-delta", text: "ok" }
+      yield finish()
+    },
+  }
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const cto = await harness.sessionFor("cto")
+    const reports: string[] = []
+    const a = await harness.spawn(cto.session.id, { agent: "researcher", brief: { goal: "first", context: "c", done_when: "d" }, background: true, wakeLead: false, onReport: (e) => reports.push(e.summary) })
+    const b = await harness.spawn(cto.session.id, { agent: "researcher", brief: { goal: "second", context: "c", done_when: "d" }, background: true, wakeLead: false, onReport: (e) => reports.push(e.summary) })
+    assert.equal(a.sessionID, b.sessionID, "same employee, same session")
+    assert.equal((b as { status: string }).status, "queued")
+    const worker = harness.get(a.sessionID)
+    assert.equal(harness.work(worker).queued, 1)
+    release()
+    for (let i = 0; i < 200 && reports.length < 2; i++) await new Promise((r) => setTimeout(r, 10))
+    assert.deepEqual(reports, ["first done", "second done"])
+    assert.equal(harness.work(worker).status, "idle")
+    assert.equal((await harness.store.listSessions()).length, 2, "one CTO session + one researcher session")
+    assert.equal(cto.inbox.size, 2, "both reports wait in the CTO inbox (wakeLead: false)")
+    const again = await new Harness(harness.cfg).sessionFor("researcher")
+    assert.equal(again.session.id, worker.session.id, "after restart the employee keeps the same session")
   } finally {
     await cleanup()
   }
@@ -271,10 +312,10 @@ test("delegate background: result arrives as inbox message and wakes parent", as
   ])
   const { harness, cleanup } = await setup(provider)
   try {
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     await harness.send(main.session.id, "go")
     await new Promise((r) => setTimeout(r, 50))
-    const child = harness.list().find((l) => l.session.parentID === main.session.id)!
+    const child = harness.list().find((l) => l.agent.id === "researcher")!
     await child.running
     await new Promise((r) => setTimeout(r, 50))
     await main.running
@@ -294,7 +335,7 @@ test("employee chat: root session for an employee has no management tools; CEO m
   ])
   const { harness, cleanup } = await setup(provider)
   try {
-    const s = await harness.createSession({ agent: "researcher" })
+    const s = await harness.sessionFor("researcher")
     assert.equal((await harness.send(s.session.id, "hello")).tag, "completed")
     assert.equal(s.messages[0]!.source, "user")
     assert.equal(s.messages[0]!.from, "ceo")
@@ -326,7 +367,7 @@ test("delegate: brief and steer are marked as coming from the CTO, not the CEO",
   }
   const { harness, cleanup } = await setup(provider)
   try {
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     const r = await harness.spawn(main.session.id, { agent: "researcher", brief: { goal: "g", context: "c", done_when: "d" }, background: true })
     const child = harness.get((r as { sessionID: string }).sessionID)
     void harness.send(child.session.id, "focus on Y", "steer", "cto")
@@ -446,7 +487,7 @@ test("CTO tools: knowledge, manage_skill, staff change the company; next session
   const { harness, db, docs, agents, cleanup } = await setup(provider)
   try {
     harness.cfg.tools.register(skill(harness.cfg.skills!))
-    const first = await harness.createSession({ agent: "cto" })
+    const first = await harness.sessionFor("cto")
     assert.equal((await harness.send(first.session.id, "keep this")).tag, "completed")
     assert.equal(docs.get("knowledge/pricing.md")?.author, "cto")
     assert.ok(!agents.has("researcher"))
@@ -454,7 +495,7 @@ test("CTO tools: knowledge, manage_skill, staff change the company; next session
     assert.ok(!reloaded.has("researcher"), "fired role stays fired")
     assert.equal(reloaded.get("writer").description, "Writes short posts")
     assert.equal(evaluate(reloaded.get("writer").permissions, "write", "drafts/a.md"), "deny")
-    const second = await harness.createSession({ agent: "cto" })
+    const second = await harness.sessionFor("cto")
     assert.equal((await harness.send(second.session.id, "hi")).tag, "completed")
   } finally {
     await cleanup()
@@ -475,7 +516,7 @@ test("employees never get management tools", async () => {
   ])
   const { harness, cleanup } = await setup(provider)
   try {
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     assert.equal((await harness.send(main.session.id, "write")).tag, "completed")
   } finally {
     await cleanup()
@@ -497,7 +538,7 @@ test("truncated tool output is saved as a hidden document the agent can read", a
         return { output: Array.from({ length: 3000 }, (_, i) => `line ${i}`).join("\n") }
       } }),
     )
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     await harness.send(main.session.id, "go")
     assert.match(docs.read("tool-output/callbig.txt") ?? "", /line 2999/)
     assert.ok(!docs.list().some((d) => d.path.startsWith("tool-output/")), "hidden from top-level list")
@@ -553,7 +594,7 @@ test("crash resume: dangling tool-call gets an interrupted result, model is told
   ])
   const { harness, agents, cleanup } = await setup(provider)
   try {
-    const s = await harness.createSession({ agent: "cto" })
+    const s = await harness.sessionFor("cto")
     const id = s.session.id
     // Mô phỏng server tắt giữa lúc tool chạy: claim, user msg, assistant + tool-call, không result, không release.
     await harness.store.claim(id)
@@ -585,7 +626,7 @@ test("usage: every model call is recorded and persisted; report splits context b
   const { harness, cleanup } = await setup(provider)
   harness.cfg.events.onUsage = (_, u) => seen.push(u.inputTokens)
   try {
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     assert.equal((await harness.send(main.session.id, "hello")).tag, "completed")
     // Lần gọi cuối provider trả 0/0 → không ghi.
     assert.deepEqual(seen, [1000, 1200, 300])
@@ -625,7 +666,7 @@ test("budget: provider without usage keeps the running estimate instead of reset
   const provider = scripted([() => [{ type: "text-delta", text: "x".repeat(4000) }, noUsage]])
   const { harness, cleanup } = await setup(provider)
   try {
-    const s = await harness.createSession({ agent: "cto" })
+    const s = await harness.sessionFor("cto")
     const before = s.estimate.estimated
     await harness.send(s.session.id, "y".repeat(4000))
     assert.ok(s.estimate.estimated >= before + 2000, `estimate ${s.estimate.estimated} should include both messages`)
@@ -641,7 +682,7 @@ test("retry: honours Retry-After; too long a wait fails fast with a clear error"
   ])
   const a = await setup(short)
   try {
-    const s = await a.harness.createSession({ agent: "cto" })
+    const s = await a.harness.sessionFor("cto")
     const t0 = Date.now()
     const outcome = await a.harness.send(s.session.id, "hi")
     assert.equal(outcome.tag, "completed")
@@ -652,7 +693,7 @@ test("retry: honours Retry-After; too long a wait fails fast with a clear error"
   const long = scripted([() => [{ type: "error", error: new Error("429 quota"), retryable: true, retryAfterMs: 3_600_000 }]])
   const b = await setup(long)
   try {
-    const s = await b.harness.createSession({ agent: "cto" })
+    const s = await b.harness.sessionFor("cto")
     const outcome = await b.harness.send(s.session.id, "hi")
     assert.equal(outcome.tag, "failed")
     assert.match(outcome.tag === "failed" ? outcome.error.message : "", /wait 3600s/)
@@ -679,7 +720,7 @@ test("stream breaks after a tool call: tool result is still recorded and the tur
   }
   const { harness, cleanup } = await setup(provider)
   try {
-    const s = await harness.createSession({ agent: "cto" })
+    const s = await harness.sessionFor("cto")
     assert.equal((await harness.send(s.session.id, "go")).tag, "completed")
     assert.equal(n, 2)
   } finally {
@@ -702,12 +743,12 @@ test("stop: interrupting the CTO also stops an employee it is waiting on (foregr
   }
   const { harness, cleanup } = await setup(provider)
   try {
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     const run = harness.send(main.session.id, "go")
     let child: ReturnType<typeof harness.list>[number] | undefined
     for (let i = 0; i < 100 && !child; i++) {
       await new Promise((r) => setTimeout(r, 10))
-      child = harness.list().find((l) => l.session.parentID === main.session.id)
+      child = harness.list().find((l) => l.agent.id === "researcher")
     }
     assert.ok(child, "child spawned")
     harness.interrupt(main.session.id)
@@ -745,7 +786,7 @@ const reply = (text: string): StreamEvent[] => [{ type: "text-delta", text }, no
 
 /** 5 tin nhắn ~5k token mỗi tin vào window 40k (ceiling 24k) → tin thứ 5 kích hoạt compaction. */
 async function longChat(harness: Harness, n = 5) {
-  const s = await harness.createSession({ agent: "cto" })
+  const s = await harness.sessionFor("cto")
   for (let i = 1; i <= n; i++) await harness.send(s.session.id, `request ${i}: ` + "x".repeat(20_000))
   return s
 }
@@ -853,7 +894,7 @@ test("overflow recovery: provider says context too long → compact and retry; p
   })
   const a = await setup(provider)
   try {
-    const s = await a.harness.createSession({ agent: "cto" })
+    const s = await a.harness.sessionFor("cto")
     for (let i = 1; i <= 4; i++) await a.harness.send(s.session.id, `request ${i}: ` + "x".repeat(20_000))
     const outcome = await a.harness.send(s.session.id, "request 5: " + "x".repeat(20_000))
     assert.equal(outcome.tag, "completed")
@@ -868,7 +909,7 @@ test("overflow recovery: provider says context too long → compact and retry; p
   )
   const b = await setup(always)
   try {
-    const s = await b.harness.createSession({ agent: "cto" })
+    const s = await b.harness.sessionFor("cto")
     for (let i = 1; i <= 4; i++) await b.harness.send(s.session.id, `request ${i}: ` + "x".repeat(20_000))
     const outcome = await b.harness.send(s.session.id, "request 5: " + "x".repeat(20_000))
     assert.equal(outcome.tag, "failed")
@@ -932,7 +973,7 @@ test("mid-session change: CEO edits COMPANY.md → next turn gets one <workspace
   const { harness, docs, cleanup } = await setup(provider)
   try {
     docs.put("COMPANY.md", "# Company\nWe sell coffee.\nPrices in VND.", "ceo")
-    const s = await harness.createSession({ agent: "cto" })
+    const s = await harness.sessionFor("cto")
     await harness.send(s.session.id, "hi")
     const system0 = provider.requests[0]!.system
     assert.equal(updateText(provider.requests[0]!).length, 0)
@@ -962,8 +1003,8 @@ test("mid-session change: new skill and knowledge reach employees; the agent's o
   ])
   const { harness, skills, cleanup } = await setup(provider)
   try {
-    const cto = await harness.createSession({ agent: "cto" })
-    const writer = await harness.createSession({ agent: "writer" })
+    const cto = await harness.sessionFor("cto")
+    const writer = await harness.sessionFor("writer")
     await harness.send(cto.session.id, "save pricing")
     await skills.write("press-release", "---\nname: Press release\ndescription: How we write press releases\n---\nSteps.")
 
@@ -1039,9 +1080,9 @@ test("ask_lead: employee asks, CTO gets status=needs_input, answers via steer, t
   const { harness, tools, cleanup } = await setup(provider)
   tools.register(askLead)
   try {
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     await harness.send(main.session.id, "do research")
-    const child = harness.list().find((l) => l.session.parentID === main.session.id)!
+    const child = harness.list().find((l) => l.agent.id === "researcher")!
     for (let i = 0; i < 300; i++) {
       const done = childTurns.length >= 2 && !child.running && !main.running && main.messages.some((m) => m.source === "subagent")
       if (done) break
@@ -1072,7 +1113,7 @@ test("fallback: non-retryable error on the main model switches to the next model
       fallbackModels: ["backup/b1"],
       events: { onNotice: (_, t) => notices.push(t) },
     })
-    const s = await h.createSession({ agent: "cto" })
+    const s = await h.sessionFor("cto")
     const outcome = await h.send(s.session.id, "hi")
     assert.equal(outcome.tag, "completed")
     assert.equal(good.requests[0]!.model, "b1")
@@ -1089,7 +1130,7 @@ test("fallback: no fallback configured → the original error is reported", asyn
   const bad = scripted([() => [{ type: "error", error: new Error("400 model not found"), retryable: false }]])
   const { harness, cleanup } = await setup(bad)
   try {
-    const s = await harness.createSession({ agent: "cto" })
+    const s = await harness.sessionFor("cto")
     const outcome = await harness.send(s.session.id, "hi")
     assert.equal(outcome.tag, "failed")
     assert.match(outcome.tag === "failed" ? outcome.error.message : "", /model not found/)
@@ -1205,7 +1246,7 @@ test("hired writer saves under drafts/, deliverables/ is refused and reported as
   ])
   const { harness, docs, cleanup } = await setup(provider)
   try {
-    const main = await harness.createSession({ agent: "cto" })
+    const main = await harness.sessionFor("cto")
     assert.equal((await harness.send(main.session.id, "make a plan")).tag, "completed")
     assert.equal(docs.get("drafts/plan.md")?.content, "the plan")
     assert.equal(docs.get("deliverables/plan.md"), undefined)

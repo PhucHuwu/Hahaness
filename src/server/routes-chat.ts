@@ -1,19 +1,30 @@
 import type { App } from "../bootstrap.ts"
 import type { Message, Session } from "../core/types.ts"
 import { HttpError, type Router } from "./http.ts"
+import { homeSessions } from "../harness.ts"
 
 export interface SessionView {
   session: Session
   running: boolean
   live: boolean
-  depth: number
+  /** Phiên chính của agent (nhận tin nhắn). false = lịch sử cũ trước khi chuyển sang 1 phiên/agent, chỉ xem. */
+  home: boolean
+  /** Nhân viên: đang làm gì. */
+  work?: { status: "working" | "waiting" | "idle"; goal?: string; from?: string; queued: number }
   /** Lỗi của lượt gần nhất, nếu có. */
   error?: string
 }
 
-export function sessionView(app: App, s: Session): SessionView {
+export function sessionView(app: App, s: Session, home?: boolean): SessionView {
   const live = app.harness.has(s.id) ? app.harness.get(s.id) : undefined
-  return { session: live?.session ?? s, running: !!live?.running, live: !!live, depth: live?.depth ?? (s.parentID ? 1 : 0), error: live?.lastError }
+  return {
+    session: live?.session ?? s,
+    running: !!live?.running,
+    live: !!live,
+    home: home ?? app.harness.homeOf(s.agent) === s.id,
+    work: live && live.agent.mode !== "primary" ? app.harness.work(live) : undefined,
+    error: live?.lastError,
+  }
 }
 
 export interface CommItem {
@@ -22,9 +33,8 @@ export interface CommItem {
   /** `ceo` hoặc id agent. */
   from: string
   to: string
-  /** Phiên con (nhân viên) liên quan. */
+  /** Phiên của nhân viên liên quan. */
   sessionID: string
-  parentID: string
   text: string
   status?: string
 }
@@ -42,20 +52,23 @@ function briefText(text: string) {
 export function chatRoutes(r: Router, app: App) {
   const { harness, agents } = app
 
+  /** Mọi phiên đã lưu, mới nhất trước; `home` đánh dấu phiên chính của từng agent. */
   r.get("/api/sessions", async () => {
     const stored = await harness.store.listSessions()
     const ids = new Set(stored.map((s) => s.id))
-    const extra = harness.list().map((l) => l.session).filter((s) => !ids.has(s.id))
-    return [...extra, ...stored].sort((a, b) => b.createdAt - a.createdAt).map((s) => sessionView(app, s))
+    const all = [...harness.list().map((l) => l.session).filter((s) => !ids.has(s.id)), ...stored].sort((a, b) => b.createdAt - a.createdAt)
+    const homes = new Set([...homeSessions(all).values()].map((s) => s.id))
+    return all.map((s) => sessionView(app, s, homes.has(s.id)))
   })
 
+  /** Phiên duy nhất của agent: mở lại phiên đã có, chưa có thì tạo (1 nhân viên = 1 phiên chat). */
   r.post("/api/sessions", async (req) => {
-    const body = await req.json<{ agent?: string; title?: string }>()
+    const body = await req.json<{ agent?: string }>()
     if (app.providerError) throw new HttpError(409, app.providerError)
-    const agent = body.agent ?? "cto"
+    const agent = body.agent ?? agents.list("primary")[0]?.id ?? "cto"
     if (!agents.has(agent)) throw new HttpError(404, `unknown agent ${agent}`)
-    const live = await harness.createSession({ agent, title: body.title })
-    return sessionView(app, live.session)
+    const live = await harness.sessionFor(agent)
+    return sessionView(app, live.session, true)
   })
 
   r.get("/api/sessions/:id", async (req) => {
@@ -72,11 +85,8 @@ export function chatRoutes(r: Router, app: App) {
       messages = state.messages
       session = state.session
     }
-    const children = harness
-      .list()
-      .filter((l) => l.session.parentID === id)
-      .map((l) => sessionView(app, l.session))
-    return { ...sessionView(app, session), messages, children }
+    const home = homeSessions([...(await harness.store.listSessions()), session]).get(session.agent)?.id === id
+    return { ...sessionView(app, session, home), messages }
   })
 
   r.get("/api/sessions/:id/usage", async (req) => {
@@ -98,7 +108,7 @@ export function chatRoutes(r: Router, app: App) {
     const body = await req.json<{ text?: string; delivery?: "queue" | "steer" }>()
     if (!body.text?.trim()) throw new HttpError(400, "text is required")
     if (app.providerError) throw new HttpError(409, app.providerError)
-    if (!harness.has(id)) await harness.resume(id)
+    await homeOnly(id)
     void harness.send(id, body.text, body.delivery ?? "steer")
     return { ok: true }
   })
@@ -110,6 +120,15 @@ export function chatRoutes(r: Router, app: App) {
     return { ok: true }
   })
 
+  /** Phiên cũ (trước khi mỗi agent chỉ có một phiên) chỉ để xem; nhắn tiếp phải vào phiên chính. */
+  async function homeOnly(id: string) {
+    const all = await harness.store.listSessions()
+    const s = all.find((x) => x.id === id) ?? (harness.has(id) ? harness.get(id).session : undefined)
+    if (!s) throw new HttpError(404, `no session ${id}`)
+    if (homeSessions([...all, s]).get(s.agent)?.id !== id) throw new HttpError(409, "Đây là phiên cũ, chỉ để xem. Hãy nhắn trong phiên hiện tại của agent này.")
+    await harness.sessionFor(s.agent)
+  }
+
   /** Direct mode: CEO giao việc thẳng cho một nhân viên; chạy nền, kết quả về inbox CTO nhưng không đánh thức. */
   r.post("/api/sessions/:id/direct", async (req) => {
     const id = req.params.id!
@@ -117,68 +136,63 @@ export function chatRoutes(r: Router, app: App) {
     if (!body.agent || !body.task?.trim()) throw new HttpError(400, "agent and task are required")
     if (!agents.has(body.agent)) throw new HttpError(404, `no employee ${body.agent}`)
     if (app.providerError) throw new HttpError(409, app.providerError)
-    if (!harness.has(id)) await harness.resume(id)
+    await homeOnly(id)
     if (harness.get(id).agent.mode !== "primary") throw new HttpError(400, "giao việc bằng @ chỉ dùng trong phiên của CTO")
     const r = await harness.spawn(id, {
       agent: body.agent,
       brief: { goal: body.task, context: "Direct request from the CEO.", done_when: "The goal above is satisfied." },
       background: true,
-      wakeParent: false,
+      wakeLead: false,
       from: "ceo",
     })
     return r
   })
 
   /**
-   * Dòng thời gian giao tiếp giữa các agent: brief/steer gửi xuống phiên con, báo cáo
-   * gửi lên phiên cha. `?root=<id>` lọc theo cây phiên của một phiên gốc.
+   * Dòng thời gian giao tiếp giữa các agent: brief/steer trong phiên nhân viên, báo cáo trong
+   * phiên người giao. Đọc cả phiên con kiểu cũ (trước khi mỗi agent chỉ có một phiên).
    */
-  r.get("/api/conversations", async (req) => {
-    const root = req.url.searchParams.get("root") ?? undefined
+  r.get("/api/conversations", async () => {
     const stored = await harness.store.listSessions()
     const byID = new Map(stored.map((s) => [s.id, s]))
     for (const l of harness.list()) byID.set(l.session.id, l.session)
-    const rootOf = (s: Session): string => (s.parentID && byID.has(s.parentID) ? rootOf(byID.get(s.parentID)!) : s.id)
-    const children = [...byID.values()].filter((s) => s.parentID && (!root || rootOf(s) === root))
-    const messagesOf = async (id: string) => (harness.has(id) ? harness.get(id).messages : ((await harness.store.load(id))?.messages ?? []))
+    // Kèm cả message còn chờ trong inbox: báo cáo direct mode không đánh thức CTO nên nằm đó tới lượt sau.
+    const messagesOf = async (id: string) =>
+      harness.has(id) ? [...harness.get(id).messages, ...harness.get(id).inbox.pending().map((i) => i.message)] : ((await harness.store.load(id))?.messages ?? [])
+    const primary = (agent: string) => agents.has(agent) && agents.get(agent).mode === "primary"
 
     const items: CommItem[] = []
-    const parents = new Set<string>()
-    for (const child of children) {
-      const parent = byID.get(child.parentID!)
-      parents.add(child.parentID!)
+    const reported = new Set<string>()
+    for (const s of byID.values()) {
+      const legacy = !!s.parentID
+      const parent = legacy ? byID.get(s.parentID!) : undefined
       let first = true
-      for (const m of await messagesOf(child.id)) {
-        if (m.role !== "user") continue
-        const text = textOf(m)
-        const legacyBrief = m.source === "system" && text.startsWith("You are a subagent")
-        if (m.source !== "agent" && m.source !== "user" && !legacyBrief) continue
-        const from = m.from ?? (m.source === "user" ? "ceo" : (parent?.agent ?? "?"))
-        items.push({ at: m.createdAt, kind: first ? "brief" : from === "ceo" ? "ceo" : "steer", from, to: child.agent, sessionID: child.id, parentID: child.parentID!, text: first ? briefText(text) : text })
-        first = false
-      }
-    }
-    for (const pid of parents) {
-      const parent = byID.get(pid)
-      for (const m of await messagesOf(pid)) {
+      for (const m of await messagesOf(s.id)) {
+        if (m.role === "user" && !primary(s.agent)) {
+          const text = textOf(m)
+          const legacyBrief = m.source === "system" && text.startsWith("You are a subagent")
+          // CEO chat thẳng với nhân viên trong phiên của họ không phải "giao tiếp giữa các agent".
+          if (m.source !== "agent" && !(legacy && m.source === "user") && !legacyBrief) continue
+          const from = m.from ?? (m.source === "user" ? "ceo" : (parent?.agent ?? "?"))
+          const brief = text.includes("<brief>") || (legacy && first)
+          items.push({ at: m.createdAt, kind: brief ? "brief" : from === "ceo" ? "ceo" : "steer", from, to: s.agent, sessionID: s.id, text: brief ? briefText(text) : text })
+          first = false
+        }
         for (const p of m.parts) {
           const raw = p.type === "text" && m.source === "subagent" ? p.text : p.type === "tool-result" && p.name === "delegate" ? p.output : undefined
           const r = raw && /<subagent sessionID="([^"]+)" agent="([^"]+)" status="([^"]+)"[^>]*>\n([\s\S]*?)\n<\/subagent>/.exec(raw)
           if (!r) continue
-          const child = byID.get(r[1]!)
-          if (!child || (root && rootOf(child) !== root)) continue
-          items.push({ at: m.createdAt, kind: "report", from: r[2]!, to: parent?.agent ?? "?", sessionID: r[1]!, parentID: pid, text: r[4]!, status: r[3] })
+          reported.add(r[1]!)
+          items.push({ at: m.createdAt, kind: "report", from: r[2]!, to: s.agent, sessionID: r[1]!, text: r[4]!, status: r[3] })
         }
       }
     }
-    // Báo cáo còn nằm trong inbox phiên cha (direct mode không đánh thức CTO) → lấy câu trả lời cuối của nhân viên.
-    const reported = new Set(items.filter((i) => i.kind === "report").map((i) => i.sessionID))
-    for (const child of children) {
-      if (reported.has(child.id) || (harness.has(child.id) && harness.get(child.id).running)) continue
-      const last = [...(await messagesOf(child.id))].reverse().find((m) => m.role === "assistant" && textOf(m).trim())
+    // Phiên con kiểu cũ mà báo cáo còn nằm trong inbox phiên cha (direct mode không đánh thức CTO).
+    for (const s of byID.values()) {
+      if (!s.parentID || reported.has(s.id) || (harness.has(s.id) && harness.get(s.id).running)) continue
+      const last = [...(await messagesOf(s.id))].reverse().find((m) => m.role === "assistant" && textOf(m).trim())
       if (!last) continue
-      const parent = byID.get(child.parentID!)
-      items.push({ at: last.createdAt, kind: "report", from: child.agent, to: parent?.agent ?? "?", sessionID: child.id, parentID: child.parentID!, text: textOf(last) })
+      items.push({ at: last.createdAt, kind: "report", from: s.agent, to: byID.get(s.parentID)?.agent ?? "?", sessionID: s.id, text: textOf(last) })
     }
     return items.sort((a, b) => a.at - b.at)
   })

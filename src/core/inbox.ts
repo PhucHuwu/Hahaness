@@ -36,6 +36,11 @@ export class Inbox {
     return this.items.splice(0)
   }
 
+  /** Xem mà không lấy ra (UI hiện báo cáo còn chờ trong inbox). */
+  pending(): readonly InboxItem[] {
+    return this.items
+  }
+
   get size() {
     return this.items.length
   }

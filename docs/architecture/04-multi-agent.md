@@ -57,18 +57,20 @@ delegate({
 })
 ```
 
-- `list` trả staff hiện có + assignment của phiên này. CTO được dặn gọi trước khi chọn người.
+- `list` trả staff hiện có và việc từng người đang làm (rảnh / đang làm "…" / chờ trả lời, số việc xếp hàng). CTO được dặn gọi trước khi chọn người.
+- `steer`/`stop` theo `agent` (id nhân viên). `sessionID` vẫn nhận được (từ báo cáo hoặc phiên cũ), harness quy về phiên hiện tại của nhân viên đó.
 - `spawn` với agent không tồn tại → lỗi gợi ý `list`/`hire` (không throw).
 - Description tool không liệt kê staff cứng (vì staff thay đổi khi `hire` → vỡ cache); thay bằng `list`.
 
 ### Lifecycle
 
 ```
-spawn ─▶ child session (parentID, agent, model, ruleset = inherit(parent, child ∪ hard-deny))
-      ─▶ inbox(child).push(queue, "You are an employee…" + [fork context] + <brief>)
-      ─▶ runTurn(child)   giới hạn maxConcurrentSubagents = 4
+spawn ─▶ sessionFor(agent)   phiên DUY NHẤT của nhân viên (xem 11-one-session-per-agent.md)
+      ─▶ nhân viên đang làm việc khác? → xếp hàng (tasks[]), làm lần lượt
+      ─▶ inbox(nhân viên).push(queue, "New task from <ai>…" + [fork context] + <brief>)
+      ─▶ runTurn   giới hạn maxConcurrentSubagents = 4 việc chưa có báo cáo (đang làm + xếp hàng)
       ├─ foreground: CTO chờ, nhận ResultEntry trong tool result
-      └─ background: trả "đang làm" ngay; xong → inbox(CTO).push(queue, <subagent …/>) → wake CTO nếu idle
+      └─ background: trả "đang làm"/"xếp hàng" ngay; xong → inbox(CTO).push(queue, <subagent …/>) → wake CTO nếu idle
 ```
 
 ### ResultEntry — thứ duy nhất qua biên
@@ -88,7 +90,8 @@ WRITE FAILED (these documents were NOT saved, whatever the summary says): delive
 ```
 
 - `filesTouched` lấy từ cặp tool-call/tool-result của `write`, và chỉ tính các lần ghi **thành công**. Path ghi lỗi, không được ghi lại thành công sau đó, nằm trong `failedWrites`. Lý do: model nhân viên vẫn có thể viết "đã lưu" dù mọi lần `write` bị từ chối, và CTO đã chuyển nguyên lời đó cho CEO.
-- Nơi lưu: nhân viên chỉ ghi được `drafts/*`. Brief mở đầu bằng một câu nhắc chỗ lưu (`saveHint`, tính từ ruleset của phiên con). CTO duyệt xong thì đưa bản cuối vào `deliverables/`. `cto.md` yêu cầu CTO chỉ nói một tài liệu tồn tại khi `write` hoặc `read` đã xác nhận.
+- `summary`, `filesTouched`, `steps` chỉ tính phần phiên **từ brief của việc này trở đi**, vì phiên nhân viên chứa nhiều việc.
+- Nơi lưu: nhân viên chỉ ghi được `drafts/*`. Brief mở đầu bằng một câu nhắc chỗ lưu (`saveHint`, tính từ ruleset của nhân viên). CTO duyệt xong thì đưa bản cuối vào `deliverables/`. `cto.md` yêu cầu CTO chỉ nói một tài liệu tồn tại khi `write` hoặc `read` đã xác nhận.
 
 ### Nhân viên hỏi ngược: tool `ask_lead` → `status: "needs_input"`
 
@@ -96,26 +99,26 @@ Nhân viên thiếu thông tin hoặc gặp quyết định không phải của 
 
 - Tool **không chờ câu trả lời trong tool call**. Người giao việc có thể đang chờ chính nhân viên đó (`delegate` foreground), nên chờ sẽ deadlock. Thay vào đó tool trả `metadata.endTurn`, và loop kết thúc lượt ngay sau batch tool hiện tại mà không gọi model thêm.
 - `Harness.result` thấy lượt cuối kết thúc bằng `ask_lead` thành công → `ResultEntry.status = "needs_input"`, `summary` là câu hỏi, lựa chọn và tiến độ. Kết quả này về CTO như mọi báo cáo khác: tool result nếu foreground, message `source: "subagent"` nếu background. Bản render có thêm câu nhắc trả lời bằng `delegate steer`.
-- CTO trả lời bằng `delegate(steer, sessionID, message)`. Nếu chỉ CEO quyết được, CTO hỏi CEO bằng `question` trước. `steer` tự `resume` phiên nhân viên nếu server đã restart.
-- Phiên nhân viên giữ `lead = { parentID, wakeParent, waiting }`. Khi lượt sau câu trả lời kết thúc, `reportToLead` gửi `ResultEntry` mới lên phiên cha và đánh thức nó, theo cùng quy tắc `wakeParent` như lúc spawn. Nhân viên có thể hỏi tiếp, khi đó lại là `needs_input`.
-- `ask_lead` chỉ hiện với phiên có `parentID`. Lọc trong `wake`, không lọc bằng rule deny, vì phiên con thừa kế mọi deny của cha. CEO chat thẳng với nhân viên thì đã có `question`.
+- CTO trả lời bằng `delegate(steer, agent, message)`. Nếu chỉ CEO quyết được, CTO hỏi CEO bằng `question` trước. `steer` tự nạp lại phiên nhân viên nếu server đã restart.
+- Việc đang làm (`Live.task`) giữ `{ lead, from, wakeLead, waiting, reported }`. Việc chưa đóng khi `needs_input`; lượt sau câu trả lời kết thúc thì `settle` gửi `ResultEntry` mới vào inbox người giao và đánh thức theo `wakeLead`. Nhân viên có thể hỏi tiếp, khi đó lại là `needs_input`. Việc kế tiếp trong hàng chỉ bắt đầu khi việc này đóng.
+- Restart khi nhân viên đang chờ trả lời: `resume` dựng lại việc từ brief cuối (`source: agent`) để câu trả lời vẫn được báo lại.
+- `ask_lead` chỉ hiện khi có việc được giao đang mở; `question` ẩn trong lúc đó (hỏi người giao, không hỏi CEO). Lọc trong `toolsFor` mỗi lượt, không bằng rule deny, vì ruleset cố định cả phiên mà phiên dùng chung cho chat với CEO lẫn việc được giao.
 - Comms hiện báo cáo này với nhãn "hỏi lại".
 
 ### Isolation của nhân viên
 
-- Hard deny (không config được): mọi `MANAGEMENT_ACTIONS` trừ `delegate` — gồm `question` (không hỏi CEO trực tiếp), `memory`, `hire`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`, `schedule`; thêm `delegate` nếu `role: leaf`. Test: "employees never get management tools".
-- Ruleset = `inherit(parent, child)`: parent deny → child không bao giờ allow.
+- Hard deny (không config được): mọi `MANAGEMENT_ACTIONS` trừ `question` và `delegate` — gồm `memory`, `hire`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`, `schedule`; thêm `delegate` nếu `role: leaf`. Orchestrator chỉ `delegate` được khi đang làm việc được giao (`spawn` kiểm tra), tối đa `maxDepth`. Test: "employees never get management tools".
 - System context: Tier A của chính họ + `COMPANY.md`; **không** có `USER.md`/`MEMORY.md` (không cần biết sếp thích gì, và giảm rò rỉ).
 - `context: fork` (analyst): thêm summary compaction gần nhất của CTO + 20 message gần nhất, cap 30k token.
-- `employeeRules` trong `Harness.activate` áp cho **mọi** phiên của agent không phải `primary`, kể cả phiên resume sau restart (lúc đó rule của `spawn` không còn): deny mọi `MANAGEMENT_ACTIONS`. Ngoại lệ: phiên gốc (CEO chat riêng với nhân viên) được `question` vì CEO đang ngồi đó, nhưng không được `delegate`; phiên con chỉ orchestrator mới được `delegate`.
+- `employeeRules` trong `Harness.activate` áp cho phiên của mọi agent không phải `primary`, kể cả sau restart. `question` không bị deny vì CEO chat thẳng trong cùng phiên; `toolsFor` ẩn nó khi đang làm việc được giao.
 
 ### Ai nói gì: `Message.source` + `from`
 
 | source | from | khi nào |
 |---|---|---|
 | `user` | `ceo` | CEO gõ |
-| `agent` | id agent / `ceo` | brief khi spawn (`from` = agent cha, hoặc `ceo` ở direct mode); `delegate steer` (`from` = CTO) |
-| `subagent` | id nhân viên | báo cáo nền đổ vào inbox phiên cha |
+| `agent` | id agent / `ceo` | brief khi spawn (`from` = người giao, hoặc `ceo` ở direct mode); `delegate steer` (`from` = CTO) |
+| `subagent` | id nhân viên | báo cáo nền đổ vào inbox phiên người giao |
 | `system` | — | harness (compaction, max steps) |
 | `agent` | `scheduler` | ghi chú `[Scheduled job]` và brief của việc định kỳ (`09-schedules.md`) |
 
@@ -134,15 +137,15 @@ Trước đây steer đánh `source: user`, nên không phân biệt được v�
 ## CEO
 
 - Mặc định gõ tự nhiên với CTO.
-- `@writer <task>` trong phiên CTO → brief tối thiểu, spawn nền (`wakeParent: false`).
-- Chat riêng: `POST /api/sessions { agent: "<id nhân viên>" }` tạo phiên gốc với nhân viên; nhân viên trả lời thẳng CEO, không giao việc/tuyển người.
-- Nhân viên và việc đang chạy hiện ở sidebar Chat và thanh "Nhân viên" trên web.
+- `@writer <task>` trong phiên CTO → brief tối thiểu, spawn nền (`wakeLead: false`), vào phiên của writer.
+- Chat riêng: bấm tên nhân viên trong sidebar → `POST /api/sessions { agent }` trả **phiên duy nhất** của nhân viên đó (tạo nếu chưa có). CEO và CTO cùng nói chuyện với nhân viên trong phiên đó; nhân viên không giao việc/tuyển người.
+- Sidebar Chat mỗi người một dòng, kèm trạng thái (rảnh / đang làm "…" / chờ trả lời / số việc chờ).
 
 ## Giới hạn
 
 | | mặc định |
 |---|---|
 | `delegate.maxDepth` | 1 |
-| `delegate.maxConcurrent` | 4 |
+| `delegate.maxConcurrent` | 4 việc chưa có báo cáo (toàn công ty) |
 | nhân viên `steps` | 30 (hire) / theo file |
 | `summaryCap` | 8.000 chars |
