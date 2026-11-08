@@ -92,6 +92,11 @@ never in this repository or in the image (see [21-license](docs/architecture/21-
 Paid items connect through the vendor's MCP gateway (`npm run gateway`, `gateway/`), which checks the licence and
 adds the vendor's upstream API keys from `gateway/.env` (see [22-gateway](docs/architecture/22-gateway.md)).
 
+### Managed hosting (vendor side)
+
+`managed/` runs one container per customer behind Caddy from the same image; `npx tsx scripts/tenant.ts add <name>`
+creates a tenant and prints its URL and setup code (see [23-managed](docs/architecture/23-managed.md)).
+
 ## Development
 
 ```sh
@@ -131,3 +136,4 @@ The design borrows from [hermes-agent](docs/research/01-hermes-agent.md), [openc
 | [20-marketplace](docs/architecture/20-marketplace.md) | "Chợ ứng dụng": static `catalog.json`, one-click install of hosted MCP servers |
 | [21-license](docs/architecture/21-license.md) | Ed25519-signed licence key tied to the instance ID; unlocks paid marketplace items, verified offline |
 | [22-gateway](docs/architecture/22-gateway.md) | Vendor MCP gateway: the licence is the bearer token, `{{license}}` placeholders, upstream keys stay with the vendor |
+| [23-managed](docs/architecture/23-managed.md) | Managed tier: one container, volume and subdomain per customer, generated compose + Caddy, `scripts/tenant.ts` |

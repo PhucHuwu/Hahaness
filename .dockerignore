@@ -9,3 +9,5 @@ ui/node_modules
 *.test.ts
 Dockerfile
 docker-compose.yml
+managed
+gateway/.env

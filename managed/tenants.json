@@ -1,0 +1,6 @@
+{
+  "domain": "localhost",
+  "image": "hahaness:local",
+  "tz": "Asia/Ho_Chi_Minh",
+  "tenants": {}
+}

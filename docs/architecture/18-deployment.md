@@ -86,5 +86,7 @@ docker compose restart hahaness   # prints a new setup code
 ## Not done yet
 
 - Published images on a registry with `stable`/`beta` tags; today the compose file builds locally (`build: .`).
+  The managed tier (`23-managed.md`) already references `ghcr.io/phuchuwu/hahaness:stable` in `tenants.json`
+  and needs the image published to run outside a laptop.
 - Running `bash` commands in a nested sandbox (`--network none`); inside the container they still run with the
   server's permissions, as `15-bash.md` describes.
