@@ -78,4 +78,4 @@ ui/            React + Vite: Chat, Kết quả (Results), Tri thức (Knowledge)
   schedules, schedule_runs  recurring jobs and run history
 ```
 
-Details: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`, `08-storage.md`, `09-schedules.md`, `10-knowledge-tree.md`, `11-one-session-per-agent.md`, `12-durable-work.md`, `13-telegram.md`, `14-uploads.md`, `15-bash.md`, `16-auth.md`.
+Details: `01-agent-loop.md`, `02-tool-calling.md`, `03-context-engineering.md`, `04-multi-agent.md`, `05-roadmap.md`, `06-providers.md`, `07-ui-server.md`, `08-storage.md`, `09-schedules.md`, `10-knowledge-tree.md`, `11-one-session-per-agent.md`, `12-durable-work.md`, `13-telegram.md`, `14-uploads.md`, `15-bash.md`, `16-auth.md`, `17-slash-commands.md`.

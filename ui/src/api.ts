@@ -82,6 +82,21 @@ export interface SessionDetail extends SessionView {
   messages: Message[]
 }
 
+/** Lệnh slash (`src/command/slash.ts`). */
+export interface CommandSpec {
+  name: string
+  aliases: string[]
+  args?: string
+  description: string
+}
+
+export interface CommandResult {
+  command?: string
+  text: string
+  /** `/new`: phiên mới để chuyển sang. */
+  sessionID?: string
+}
+
 export interface UsageRecord {
   at: number
   model: string

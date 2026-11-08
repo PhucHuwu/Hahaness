@@ -16,6 +16,7 @@ Harness.sessionFor(agentId)
 - `homeSessions(sessions)` picks the home session: the newest root session per agent. The server and the UI use the same function.
 - The harness no longer has `createSession`. `POST /api/sessions { agent }` returns `sessionFor(agent)`.
 - Other sessions (older root sessions, old-style child sessions with `parentID`) are **old history**: still viewable (the "Old history" (Lịch sử cũ) section in the sidebar), but sending a message or `/direct` to them returns 409 "Đây là phiên cũ, chỉ để xem…" ("This is an old session, view only…"). Old data is not migrated.
+- Exception: the CEO can type `/new` to start a fresh home session for an agent. The previous one becomes old history the same way. See `17-slash-commands.md`.
 
 ## Assigning work into the shared session
 

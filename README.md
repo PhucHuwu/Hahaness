@@ -101,3 +101,4 @@ The design borrows from [hermes-agent](docs/research/01-hermes-agent.md), [openc
 | [14-uploads](docs/architecture/14-uploads.md) | Attachments: documents become `uploads/`, images go to the model |
 | [15-bash](docs/architecture/15-bash.md) | Running code in a private working directory without leaking secrets |
 | [16-auth](docs/architecture/16-auth.md) | Single-password login, setup code, session cookie, CSRF and brute-force protection |
+| [17-slash-commands](docs/architecture/17-slash-commands.md) | `/help`, `/stop`, `/compact`, `/new` and other chat commands on web and Telegram |

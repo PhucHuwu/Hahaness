@@ -3,6 +3,7 @@ import type { Message, Part, Session } from "../core/types.ts"
 import { attach, UploadError } from "../upload/attachments.ts"
 import { HttpError, type Router } from "./http.ts"
 import { homeSessions } from "../harness.ts"
+import { COMMANDS, runCommand } from "../command/slash.ts"
 
 export interface SessionView {
   session: Session
@@ -125,6 +126,18 @@ export function chatRoutes(r: Router, app: App) {
     }
     void harness.send(id, body.text?.trim() ?? "", body.delivery ?? "steer", "ceo", parts)
     return { ok: true }
+  })
+
+  r.get("/api/commands", () => COMMANDS)
+
+  /** Lệnh slash (`/help`, `/compact`…): chạy ngay, không vào transcript. `sessionID` có khi `/new` tạo phiên mới. */
+  r.post("/api/sessions/:id/command", async (req) => {
+    const id = req.params.id!
+    const body = await req.json<{ text?: string }>()
+    if (!body.text?.trim().startsWith("/")) throw new HttpError(400, "text must start with /")
+    if (app.providerError) throw new HttpError(409, app.providerError)
+    await homeOnly(id)
+    return runCommand(harness, id, body.text)
   })
 
   r.post("/api/sessions/:id/stop", (req) => {

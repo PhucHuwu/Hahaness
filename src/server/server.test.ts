@@ -256,6 +256,29 @@ test("one session per agent: opening an agent twice returns the same session; di
   assert.match(items.at(-2)!.text, /^viết tiêu đề/)
 })
 
+test("slash commands: list, /help, unknown command, /new moves the old chat to history", async () => {
+  const cmds = await get<Array<{ name: string; aliases: string[] }>>("/api/commands")
+  assert.ok(cmds.some((c) => c.name === "new" && c.aliases.includes("clear")))
+  const { data: m } = await send<{ session: { id: string } }>("POST", "/api/sessions", { agent: "marketer" })
+  assert.equal((await send("POST", `/api/sessions/${m.session.id}/command`, { text: "hello" })).status, 400)
+  const help = await send<{ command: string; text: string }>("POST", `/api/sessions/${m.session.id}/command`, { text: "/help" })
+  assert.equal(help.data.command, "help")
+  assert.match(help.data.text, /\/compact \[trọng tâm\]/)
+  const unknown = await send<{ command?: string; text: string }>("POST", `/api/sessions/${m.session.id}/command`, { text: "/nope" })
+  assert.equal(unknown.data.command, undefined)
+  assert.match(unknown.data.text, /\/help/)
+
+  const fresh = await send<{ command: string; sessionID: string }>("POST", `/api/sessions/${m.session.id}/command`, { text: "/clear" })
+  assert.equal(fresh.data.command, "new")
+  assert.notEqual(fresh.data.sessionID, m.session.id)
+  const sessions = await get<Array<{ session: { id: string }; home: boolean }>>("/api/sessions")
+  assert.equal(sessions.find((x) => x.session.id === m.session.id)?.home, false, "old chat is history")
+  assert.equal(sessions.find((x) => x.session.id === fresh.data.sessionID)?.home, true)
+  assert.equal((await send("POST", `/api/sessions/${m.session.id}/messages`, { text: "hi" })).status, 409, "old chat is read-only")
+  const reopened = await send<{ session: { id: string } }>("POST", "/api/sessions", { agent: "marketer" })
+  assert.equal(reopened.data.session.id, fresh.data.sessionID)
+})
+
 test("schedules: create, validate, run now (runs in the CTO's one session), pause, delete", async () => {
   const bad = await send<{ error: string }>("POST", "/api/schedules", { title: "x", agent: "researcher", cron: "every night", task: { goal: "g" } })
   assert.equal(bad.status, 400)

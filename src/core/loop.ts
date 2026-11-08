@@ -327,7 +327,7 @@ function launchTool(ctx: TurnContext, ev: Extract<StreamEvent, { type: "tool-cal
  * model compaction → model chính → checkpoint dựng tay (`fallbackSummary`). Trả false khi không có
  * gì để nén, bị dừng, hoặc mọi model lỗi mạng (để loop retry như bình thường).
  */
-async function compact(ctx: TurnContext, opts: { keepRecentTokens?: number; flush?: boolean } = {}): Promise<boolean> {
+export async function compact(ctx: TurnContext, opts: { keepRecentTokens?: number; flush?: boolean; focus?: string } = {}): Promise<boolean> {
   ctx.events.onNotice?.(ctx.sessionID, "compacting context…")
   if (opts.flush && ctx.memoryFlush !== false) await flushMemory(ctx)
   if (ctx.signal.aborted) return false
@@ -348,7 +348,7 @@ async function compact(ctx: TurnContext, opts: { keepRecentTokens?: number; flus
   let formatFailed = false
   for (const c of candidates) {
     try {
-      summary = await summarizeFitted(ctx, c, input)
+      summary = await summarizeFitted(ctx, c, input, opts.focus)
       break
     } catch (e) {
       if (ctx.signal.aborted) return false
@@ -374,13 +374,13 @@ async function compact(ctx: TurnContext, opts: { keepRecentTokens?: number; flus
 }
 
 /** Request summarize phải vừa context của model tóm tắt; tự nó báo tràn → thu nhỏ input tiếp. */
-async function summarizeFitted(ctx: TurnContext, c: { provider: ProviderClient; model: string }, input: Message[]) {
+async function summarizeFitted(ctx: TurnContext, c: { provider: ProviderClient; model: string }, input: Message[], focus?: string) {
   const info = c.provider.info(c.model)
   const systemTokens = ctx.system.reduce((n, s) => n + estimateText(s), 0)
   const room = ceiling(info.contextWindow) - systemTokens - SUMMARY_MAX_OUTPUT
   for (const f of [1, ...OVERFLOW_SHRINK.slice(1)]) {
     try {
-      return await summarize(c.provider, c.model, ctx.system, fitForSummary(input, Math.max(2_000, Math.floor(room * f))), ctx.signal, (u) => recordUsage(ctx, c.model, "compaction", u))
+      return await summarize(c.provider, c.model, ctx.system, fitForSummary(input, Math.max(2_000, Math.floor(room * f))), ctx.signal, (u) => recordUsage(ctx, c.model, "compaction", u), focus)
     } catch (e) {
       if (!isOverflow((e as Error).message) || f === OVERFLOW_SHRINK.at(-1)) throw e
     }

@@ -3,6 +3,7 @@ import type { Db } from "../core/db.ts"
 import type { Message, Outcome, Part } from "../core/types.ts"
 import { attach, UploadError } from "../upload/attachments.ts"
 import type { Harness } from "../harness.ts"
+import { helpText, parseCommand, runCommand } from "../command/slash.ts"
 
 /**
  * Kênh Telegram: CEO chat với CTO qua bot Telegram, ngoài giao diện web.
@@ -167,7 +168,7 @@ export class TelegramChannel {
       if (!s.chatID && s.pairCode && code === s.pairCode && chat.type === "private") {
         const name = [chat.first_name, chat.last_name].filter(Boolean).join(" ") || chat.username || String(chat.id)
         this.save({ token: s.token, offset: this.settings()?.offset, chatID: chat.id, chatName: name })
-        await this.send(chat.id, "Đã liên kết. Từ giờ bạn nhắn ở đây là nói chuyện với CTO; CTO trả lời và hỏi bạn cũng qua đây.\nLệnh: /stop dừng việc CTO đang làm, /status xem CTO đang làm gì.")
+        await this.send(chat.id, "Đã liên kết. Từ giờ bạn nhắn ở đây là nói chuyện với CTO; CTO trả lời và hỏi bạn cũng qua đây.\n\n" + helpText())
         return
       }
       await this.send(chat.id, s.chatID ? "Bot này đã được liên kết với người khác." : "Bot chưa liên kết. Gửi mã ghép nối hiện ở trang Cài đặt của Hahaness.")
@@ -188,14 +189,14 @@ export class TelegramChannel {
     const harness = this.harness()
     if (!harness) return this.send(chat.id, "Hệ thống chưa sẵn sàng.")
     const cto = await harness.sessionFor(primaryAgent(harness))
-    if (text === "/start") return this.send(chat.id, "Đã liên kết rồi. Cứ nhắn cho CTO.")
-    if (text === "/stop") {
-      if (cto.running) harness.interrupt(cto.session.id)
-      return this.send(chat.id, cto.running ? "Đã dừng việc CTO đang làm." : "CTO đang rảnh.")
-    }
-    if (text === "/status") {
-      const busy = harness.list().filter((l) => l.running || l.task).map((l) => l.agent.name)
-      return this.send(chat.id, busy.length ? `Đang làm việc: ${busy.join(", ")}.` : "Mọi người đang rảnh.")
+    const command = file ? undefined : parseCommand(text)
+    if (command?.name === "start") return this.send(chat.id, "Đã liên kết rồi. Cứ nhắn cho CTO. Gõ /help để xem các lệnh.")
+    if (command) {
+      // Không chờ: `/compact` có thể lâu, trong lúc đó vẫn phải nhận được `/stop`.
+      void runCommand(harness, cto.session.id, text)
+        .then((r) => this.send(chat.id, r.text))
+        .catch((e) => void (this.error = (e as Error).message))
+      return
     }
     let parts: Part[] = []
     if (file) {

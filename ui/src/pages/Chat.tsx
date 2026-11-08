@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { api, ApiError, type Message, type Part, type Question, type SessionDetail, type SessionView, type Staff } from "../api.ts"
+import { api, ApiError, type CommandResult, type CommandSpec, type Message, type Part, type Question, type SessionDetail, type SessionView, type Staff } from "../api.ts"
 import { useServerEvents } from "../events.ts"
 import { applyEvent, userMessage, type ChatState } from "./chat-state.ts"
 import { Comms } from "./Comms.tsx"
@@ -10,6 +10,13 @@ export function Chat({ sessionID }: { sessionID?: string }) {
   const [staff, setStaff] = useState<Staff[]>([])
   const [error, setError] = useState<string>()
   const [opening, setOpening] = useState<string>()
+  const [commands, setCommands] = useState<CommandSpec[]>([])
+  /** Kết quả `/new` hiện ở cuộc trò chuyện mới vừa chuyển sang. */
+  const [carry, setCarry] = useState<{ sessionID: string; text: string }>()
+
+  useEffect(() => {
+    api.get<CommandSpec[]>("/api/commands").then(setCommands, () => {})
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
@@ -117,7 +124,19 @@ export function Chat({ sessionID }: { sessionID?: string }) {
       {comms ? (
         <Comms agentName={agentName} />
       ) : current ? (
-        <Conversation key={current} sessionID={current} staff={staff} homeOf={(a) => homeOf(a)?.session.id} />
+        <Conversation
+          key={current}
+          sessionID={current}
+          staff={staff}
+          homeOf={(a) => homeOf(a)?.session.id}
+          commands={commands}
+          initialReply={carry?.sessionID === current ? carry.text : undefined}
+          onNewSession={(id, text) => {
+            setCarry({ sessionID: id, text })
+            void refresh()
+            location.hash = `chat/${id}`
+          }}
+        />
       ) : (
         <div className="chat-main">
           <div className="empty" style={{ margin: "auto" }}>
@@ -129,7 +148,7 @@ export function Chat({ sessionID }: { sessionID?: string }) {
   )
 }
 
-/** Phiên từ trước khi mỗi agent chỉ có một phiên: vẫn xem được, không nhắn tiếp. */
+/** Phiên cũ của agent (trước khi mỗi agent chỉ có một phiên, hoặc trước `/new`): vẫn xem được, không nhắn tiếp. */
 function OldSessions({ sessions, current, agentName }: { sessions: SessionView[]; current?: string; agentName: (id: string) => string }) {
   const [open, setOpen] = useState(sessions.some((s) => s.session.id === current))
   return (
@@ -152,8 +171,26 @@ function OldSessions({ sessions, current, agentName }: { sessions: SessionView[]
   )
 }
 
-function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: Staff[]; homeOf: (agent: string) => string | undefined }) {
+function Conversation({
+  sessionID,
+  staff,
+  homeOf,
+  commands,
+  initialReply,
+  onNewSession,
+}: {
+  sessionID: string
+  staff: Staff[]
+  homeOf: (agent: string) => string | undefined
+  commands: CommandSpec[]
+  initialReply?: string
+  onNewSession: (sessionID: string, reply: string) => void
+}) {
   const [detail, setDetail] = useState<SessionDetail>()
+  /** Kết quả lệnh slash gần nhất (không thuộc transcript). */
+  const [cmdReply, setCmdReply] = useState(initialReply)
+  const [menuIndex, setMenuIndex] = useState(0)
+  const [menuClosed, setMenuClosed] = useState(false)
   const [state, setState] = useState<ChatState>({ messages: [], running: false, notices: [] })
   const [questions, setQuestions] = useState<Question[]>([])
   const [loadError, setLoadError] = useState<string>()
@@ -193,10 +230,40 @@ function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: 
   const isPrimary = !me || me.mode === "primary"
   const myName = me?.name ?? detail?.session.agent ?? "CTO"
 
+  // Lệnh slash: gõ "/" → danh sách lệnh lọc theo chữ đang gõ (chỉ khi chưa có dấu cách).
+  const typed = /^\/(\S*)$/.exec(text)?.[1]?.toLowerCase()
+  const matches = typed === undefined || menuClosed ? [] : commands.filter((c) => [c.name, ...c.aliases].some((n) => n.startsWith(typed)))
+  const picked = matches[Math.min(menuIndex, matches.length - 1)]
+  const fill = (c: CommandSpec) => {
+    setText(`/${c.name}${c.args ? " " : ""}`)
+    setMenuIndex(0)
+  }
+
+  const runSlash = async (t: string) => {
+    setSending(true)
+    setCmdReply(undefined)
+    try {
+      const r = await api.post<CommandResult>(`/api/sessions/${sessionID}/command`, { text: t })
+      setText("")
+      if (r.sessionID && r.sessionID !== sessionID) onNewSession(r.sessionID, r.text)
+      else setCmdReply(r.text)
+    } finally {
+      setSending(false)
+    }
+  }
+
   const send = async () => {
     const t = text.trim()
     if (!t && files.length === 0) return
     setSendError(undefined)
+    if (files.length === 0 && t.startsWith("/")) {
+      try {
+        await runSlash(t)
+      } catch (e) {
+        setSendError((e as Error).message)
+      }
+      return
+    }
     const direct = isPrimary && files.length === 0 ? /^@([\w-]+)\s+([\s\S]+)$/.exec(t) : null
     try {
       if (files.length > 0) {
@@ -293,13 +360,43 @@ function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: 
       {!detail.home ? (
         <div className="chat-compose">
           <div className="hint">
-            Đây là phiên cũ (trước khi mỗi người chỉ có một cuộc trò chuyện), chỉ để xem.{" "}
+            Đây là cuộc trò chuyện cũ, chỉ để xem.{" "}
             {homeOf(detail.session.agent) ? <a href={`#chat/${homeOf(detail.session.agent)}`}>Nhắn {myName} ở cuộc trò chuyện hiện tại</a> : null}
           </div>
         </div>
       ) : (
       <div className="chat-compose">
+        {cmdReply && (
+          <div className="cmd-reply" role="status">
+            <pre>{cmdReply}</pre>
+            <button className="link" title="Đóng" aria-label="Đóng" onClick={() => setCmdReply(undefined)}>
+              ×
+            </button>
+          </div>
+        )}
         {sendError && <div className="notice err small" style={{ marginBottom: 8 }}>{sendError}</div>}
+        {matches.length > 0 && (
+          <ul className="slash-menu" id="slash-menu" role="listbox" aria-label="Lệnh">
+            {matches.map((c) => (
+              <li
+                key={c.name}
+                id={`slash-${c.name}`}
+                role="option"
+                aria-selected={c === picked}
+                className={c === picked ? "active" : undefined}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  fill(c)
+                }}
+              >
+                <code>/{c.name}</code>
+                {c.args && <span className="muted"> {c.args}</span>}
+                {c.aliases.length > 0 && <span className="muted small"> ({c.aliases.map((a) => `/${a}`).join(", ")})</span>}
+                <span className="desc">{c.description}</span>
+              </li>
+            ))}
+          </ul>
+        )}
         {files.length > 0 && (
           <div className="attach-list">
             {files.map((f, i) => (
@@ -345,9 +442,36 @@ function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: 
             }}
             className="grow"
             value={text}
-            placeholder={state.running ? `Gửi thêm chỉ dẫn cho ${myName} đang làm…` : `Nhắn cho ${myName}…`}
-            onChange={(e) => setText(e.target.value)}
+            placeholder={state.running ? `Gửi thêm chỉ dẫn cho ${myName} đang làm…` : `Nhắn cho ${myName}… (gõ / để xem lệnh)`}
+            onChange={(e) => {
+              setText(e.target.value)
+              setMenuClosed(false)
+            }}
+            aria-autocomplete="list"
+            aria-controls={matches.length ? "slash-menu" : undefined}
+            aria-activedescendant={picked ? `slash-${picked.name}` : undefined}
             onKeyDown={(e) => {
+              if (picked) {
+                const move = (d: number) => {
+                  e.preventDefault()
+                  setMenuIndex((Math.min(menuIndex, matches.length - 1) + d + matches.length) % matches.length)
+                }
+                if (e.key === "ArrowDown") return move(1)
+                if (e.key === "ArrowUp") return move(-1)
+                if (e.key === "Escape") {
+                  e.preventDefault()
+                  return setMenuClosed(true)
+                }
+                // Tab luôn điền; Enter điền khi chữ đang gõ chưa phải đúng tên lệnh (đúng rồi thì chạy luôn).
+                if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && typed !== picked.name && !picked.aliases.includes(typed ?? ""))) {
+                  e.preventDefault()
+                  // Lệnh có tham số thì điền để gõ tiếp; không có thì Enter chạy luôn.
+                  if (e.key === "Tab" || picked.args) return fill(picked)
+                  setSendError(undefined)
+                  void runSlash(`/${picked.name}`).catch((err) => setSendError((err as Error).message))
+                  return
+                }
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault()
                 void send()
@@ -359,7 +483,7 @@ function Conversation({ sessionID, staff, homeOf }: { sessionID: string; staff: 
           </button>
         </div>
         <div className="hint">
-          Enter để gửi, Shift+Enter xuống dòng. Kéo thả hoặc dán file/ảnh vào đây để gửi kèm.
+          Enter để gửi, Shift+Enter xuống dòng. Kéo thả hoặc dán file/ảnh vào đây để gửi kèm. Gõ <code>/</code> để xem lệnh.
           {isPrimary ? (
             <>
               {" "}Giao việc thẳng cho nhân viên: <code>@writer viết email chào mừng</code>

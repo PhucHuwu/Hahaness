@@ -23,7 +23,7 @@ even when no one has the web UI open (works together with `12-durable-work.md`).
   work.
   - A failed turn reports the error; a stopped turn (`interrupted`) sends nothing.
 - An answer to a `question` is a normal message. Pressing a button on the Telegram keyboard sends the option's exact text.
-- Commands: `/stop` stops the CTO's running turn, `/status` shows who is working.
+- Commands: the shared slash commands (`17-slash-commands.md`), run against the CTO session. `/help` lists them and the pairing welcome includes the list. Commands run without blocking polling, so `/stop` still arrives during a long `/compact`.
 - Photos and files (documents) are downloaded via `getFile` and attached the same way as on the web (`14-uploads.md`); the caption is the message content.
 - Long messages are split into several messages of ≤ 4000 characters (Telegram's limit is 4096), preferably at line breaks.
   Sent as plain text, without Telegram Markdown: the model's Markdown often makes Telegram reject the message.

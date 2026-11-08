@@ -170,6 +170,36 @@ test("telegram: pairing links only the CEO; their messages reach the CTO and rep
   }
 })
 
+test("telegram: slash commands are answered directly and never reach the model", async () => {
+  const requests: ModelRequest[] = []
+  const provider: ProviderClient = {
+    info: () => ({ id: "mock", contextWindow: 100_000, maxOutput: 8_000 }),
+    async *stream(req) {
+      requests.push(req)
+      yield { type: "text-delta", text: "hi" }
+      yield finish()
+    },
+  }
+  const { channel, tg, cleanup } = await setup(provider)
+  try {
+    const st = await channel.configure("123:abc")
+    tg.say(42, `/start ${st.pairCode}`)
+    await until(() => !!channel.status().linked)
+    assert.match(tg.sent.at(-1)!.text, /\/compact/, "welcome lists the commands")
+    tg.say(42, "/help@hahaness_bot")
+    await until(() => tg.sent.filter((m) => m.text.includes("Các lệnh")).length >= 2)
+    tg.say(42, "/status")
+    await until(() => tg.sent.some((m) => m.text === "Mọi người đang rảnh."))
+    tg.say(42, "/stop")
+    await until(() => tg.sent.some((m) => /CTO đang rảnh/.test(m.text)))
+    tg.say(42, "/xyz")
+    await until(() => tg.sent.some((m) => m.text.startsWith("Không có lệnh /xyz")))
+    assert.equal(requests.length, 0)
+  } finally {
+    await cleanup()
+  }
+})
+
 test("telegram: a CTO turn not started from Telegram (web, schedule, report) is still forwarded", async () => {
   const provider: ProviderClient = {
     info: () => ({ id: "mock", contextWindow: 100_000, maxOutput: 8_000 }),

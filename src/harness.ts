@@ -5,10 +5,12 @@ import type { Db } from "./core/db.ts"
 import type { DocumentStore } from "./context/documents.ts"
 import { Inbox } from "./core/inbox.ts"
 import { id } from "./core/id.ts"
-import { repairDangling, runTurn, type LoopEvents, type TurnContext } from "./core/loop.ts"
+import { compact as compactContext, repairDangling, runTurn, type LoopEvents, type TurnContext } from "./core/loop.ts"
 import { fromCheckpoint } from "./context/compaction.ts"
 
 const SKILLS_SOURCE = "skills/index"
+/** `/compact`: phần giữ nguyên văn (token), nhỏ hơn lúc tự nén. */
+const MANUAL_KEEP_TOKENS = 4_000
 
 export const RESUMED_AFTER_CRASH =
   "[harness] Your previous turn in this conversation was cut off (the app was restarted). Tool calls marked \"interrupted\" may or may not have taken effect; check the workspace before redoing them."
@@ -18,7 +20,7 @@ import { addTotals, contextBreakdown, summarizeUsage, type ContextBreakdown, typ
 import { build as buildSystem } from "./context/system.ts"
 import { changed, environment, removed, updateNotice, type InstructionSource } from "./context/instructions.ts"
 import * as workspace from "./context/workspace.ts"
-import { ceiling, estimateMessage } from "./context/budget.ts"
+import { ceiling, estimateMessage, total } from "./context/budget.ts"
 import { AskGate, type AskHandler } from "./permission/ask.ts"
 import { denied, evaluate, type Ruleset } from "./permission/ruleset.ts"
 import type { ProviderRegistry } from "./provider/registry.ts"
@@ -135,15 +137,20 @@ export class Harness {
   }
 
   private async openHome(agentID: string): Promise<Live> {
-    const agent = this.cfg.agents.get(agentID)
     const existing = homeSessions(await this.store.listSessions()).get(agentID)
     if (existing) {
       this.homeIDs.set(agentID, existing.id)
       return this.resume(existing.id)
     }
+    return this.createHome(agentID)
+  }
+
+  /** `after`: phiên mới phải mới hơn phiên chính hiện tại (cùng mili-giây thì `homeSessions` chọn sai). */
+  private async createHome(agentID: string, after = 0): Promise<Live> {
+    const agent = this.cfg.agents.get(agentID)
     const modelRef = agent.model[0] ?? this.cfg.defaultModel
     this.cfg.providers.resolve(modelRef)
-    const session: Session = { id: id("ses"), agent: agent.id, model: modelRef, title: agent.name, createdAt: Date.now() }
+    const session: Session = { id: id("ses"), agent: agent.id, model: modelRef, title: agent.name, createdAt: Math.max(Date.now(), after) }
     await this.store.createSession(session)
     this.homeIDs.set(agentID, session.id)
     return this.activate(session, agent)
@@ -328,9 +335,10 @@ export class Harness {
     live.inbox.pushFront("queue", { id: id("msg"), role: "user", source: "system", createdAt: Date.now(), parts: [{ type: "text", text: notice }] })
   }
 
-  wake(live: Live): Promise<Outcome> {
-    if (live.running) return live.running
-    live.abort = new AbortController()
+  /** Dựng context cho một lượt (hoặc cho `/compact`) với `live.abort` hiện tại; undefined = không model nào dùng được. */
+  private turnContext(live: Live): TurnContext | undefined {
+    const [resolved, ...fallbacks] = this.modelChain(live)
+    if (!resolved) return undefined
     const toolContextBase = {
       sessionID: live.session.id,
       agent: live.agent.id,
@@ -339,13 +347,7 @@ export class Harness {
       askGate: this.askGate,
       harness: this,
     }
-    const tools = this.toolsFor(live)
-    const [resolved, ...fallbacks] = this.modelChain(live)
-    if (!resolved) {
-      live.lastError = `no usable model for ${live.session.model}`
-      return Promise.resolve({ tag: "failed", error: new Error(live.lastError) })
-    }
-    const ctx: TurnContext = {
+    return {
       sessionID: live.session.id,
       agent: live.agent,
       model: resolved.model,
@@ -353,7 +355,7 @@ export class Harness {
       fallbacks,
       onModelSwitch: (ref) => (live.activeModel = ref),
       system: live.system,
-      tools,
+      tools: this.toolsFor(live),
       toolContext: { ...toolContextBase, ask: makeAsk({ ...toolContextBase, signal: live.abort.signal }, live.saved) },
       inbox: live.inbox,
       store: this.store,
@@ -366,6 +368,72 @@ export class Harness {
       saveOutput: (callID, output) => this.cfg.docs.put(`tool-output/${callID}.txt`, output, live.agent.id),
       events: this.cfg.events,
       signal: live.abort.signal,
+    }
+  }
+
+  /**
+   * `/compact [trọng tâm]`: nén context ngay, ngoài lượt chat. Trong lúc nén phiên tính là đang chạy
+   * (tin nhắn mới xếp hàng, Dừng hủy được); xong mà có tin chờ thì chạy lượt luôn.
+   * Giữ nguyên văn ít hơn lúc tự nén vì CEO chủ động muốn gọn.
+   */
+  async compact(sessionID: string, focus?: string): Promise<{ compacted: boolean; aborted: boolean; before: number; after: number }> {
+    const live = this.get(sessionID)
+    if (live.running) throw new Error("session is busy")
+    live.abort = new AbortController()
+    const signal = live.abort.signal
+    const ctx = this.turnContext(live)
+    if (!ctx) throw new Error(`no usable model for ${live.session.model}`)
+    const before = total(live.estimate)
+    const window = ctx.provider.info(ctx.model).contextWindow
+    const keepRecentTokens = Math.min(MANUAL_KEEP_TOKENS, Math.floor(ceiling(window) * 0.4))
+    const idle: Outcome = { tag: "completed", text: "" }
+    this.cfg.events.onTurnStart?.(sessionID)
+    const job = compactContext(ctx, { flush: true, keepRecentTokens, focus: focus?.trim() || undefined }).finally(() => {
+      live.compaction = ctx.compactionSummary
+      live.estimate = ctx.estimate
+    })
+    live.running = job.then(
+      () => {
+        live.running = undefined
+        this.cfg.events.onTurnEnd?.(sessionID, idle)
+        return live.inbox.size > 0 ? this.wake(live) : idle
+      },
+      (e) => {
+        live.running = undefined
+        const outcome: Outcome = { tag: "failed", error: e as Error }
+        this.cfg.events.onTurnEnd?.(sessionID, outcome)
+        return live.inbox.size > 0 ? this.wake(live) : outcome
+      },
+    )
+    const compacted = await job
+    return { compacted, aborted: signal.aborted, before, after: total(live.estimate) }
+  }
+
+  /**
+   * `/new`: phiên gốc mới cho agent; phiên cũ thành lịch sử chỉ xem (`homeSessions` lấy phiên mới nhất).
+   * Tin còn chờ trong inbox (vd báo cáo nhân viên chưa đọc) chuyển sang phiên mới.
+   * Không được khi đang chạy hay đang có việc được giao: báo cáo sẽ không còn chỗ về.
+   */
+  async newSession(agentID: string): Promise<Live> {
+    const old = await this.sessionFor(agentID)
+    if (old.running) throw new Error("session is busy")
+    if (old.task || old.tasks.length > 0) throw new Error("session has assigned work")
+    const p = this.createHome(agentID, old.session.createdAt + 1)
+    this.homes.set(agentID, p)
+    p.catch(() => this.homes.delete(agentID))
+    const live = await p
+    for (const item of old.inbox.drainAll()) live.inbox.push(item.delivery, item.message)
+    this.live.delete(old.session.id)
+    return live
+  }
+
+  wake(live: Live): Promise<Outcome> {
+    if (live.running) return live.running
+    live.abort = new AbortController()
+    const ctx = this.turnContext(live)
+    if (!ctx) {
+      live.lastError = `no usable model for ${live.session.model}`
+      return Promise.resolve({ tag: "failed", error: new Error(live.lastError) })
     }
     live.lastError = undefined
     this.cfg.events.onTurnStart?.(live.session.id)

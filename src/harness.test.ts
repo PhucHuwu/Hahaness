@@ -30,6 +30,7 @@ import { updateNotice } from "./context/instructions.ts"
 import { askLead } from "./tool/builtin/ask-lead.ts"
 import { question } from "./tool/builtin/question.ts"
 import { AnthropicProvider, requestBody, toAnthropicMessages } from "./provider/anthropic.ts"
+import { parseCommand, runCommand } from "./command/slash.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -880,6 +881,66 @@ test("compaction: compaction.model writes the summary; main model never sees the
     assert.equal(cheap.requests.length, 1)
     assert.equal(cheap.requests[0]!.model, "summarizer")
     assert.equal((await h.store.load(s.session.id))!.compactions[0]!.summary, GOOD_SUMMARY)
+  } finally {
+    await cleanup()
+  }
+})
+
+test("/compact: compacts on demand with the CEO's focus; next turn starts from the checkpoint", async () => {
+  const provider = windowed(100_000, (req) => (isSummaryReq(req) ? reply(GOOD_SUMMARY) : reply("ok")))
+  const { harness, cleanup } = await setup(provider)
+  try {
+    const s = await longChat(harness, 3)
+    assert.equal(provider.requests.filter(isSummaryReq).length, 0, "no automatic compaction yet")
+    const r = await runCommand(harness, s.session.id, "/compact  giá và khách hàng")
+    assert.equal(r.command, "compact")
+    assert.match(r.text, /Đã tóm gọn/)
+    const sum = provider.requests.find(isSummaryReq)!
+    assert.match(allText(sum), /focus this summary on: giá và khách hàng/)
+    assert.equal((await harness.store.load(s.session.id))!.compactions.length, 1)
+    assert.ok(!s.running, "session idle again")
+    await harness.send(s.session.id, "next")
+    const first = provider.requests.at(-1)!.messages[0]!.parts[0]!
+    assert.ok(first.type === "text" && first.text.includes("<conversation-checkpoint>"))
+    assert.doesNotMatch(allText(provider.requests.at(-1)!), /request 1:/)
+
+    const empty = await harness.sessionFor("writer")
+    assert.match((await runCommand(harness, empty.session.id, "/compact")).text, /Chưa tóm gọn được/)
+  } finally {
+    await cleanup()
+  }
+})
+
+test("slash commands: /new starts a fresh home session and carries unread inbox; /stop, /status, /memory, /usage reply in Vietnamese", async () => {
+  const provider = scripted([])
+  const { harness, docs, cleanup } = await setup(provider)
+  try {
+    const old = await harness.sessionFor("cto")
+    await harness.send(old.session.id, "hi")
+    assert.match((await runCommand(harness, old.session.id, "/stop")).text, /đang rảnh/)
+    assert.match((await runCommand(harness, old.session.id, "/status")).text, /Mọi người đang rảnh/)
+    assert.match((await runCommand(harness, old.session.id, "/memory")).text, /Chưa ghi nhớ/)
+    workspace.writeMemory(docs, ["CEO thích báo cáo ngắn"])
+    assert.match((await runCommand(harness, old.session.id, "/memory")).text, /1\. CEO thích báo cáo ngắn/)
+    assert.match((await runCommand(harness, old.session.id, "/cost")).text, /Model: mock\/mock/)
+    assert.match((await runCommand(harness, old.session.id, "/staff")).text, /writer/)
+    assert.deepEqual(parseCommand("/compact@hahaness_bot giữ giá"), { name: "compact", args: "giữ giá" })
+    assert.equal(parseCommand("không phải lệnh"), undefined)
+
+    old.inbox.push("queue", { id: "m-unread", role: "user", source: "subagent", from: "writer", createdAt: Date.now(), parts: [{ type: "text", text: "report" }] })
+    const r = await runCommand(harness, old.session.id, "/new")
+    assert.equal(r.command, "new")
+    assert.ok(r.sessionID && r.sessionID !== old.session.id)
+    assert.equal(harness.homeOf("cto"), r.sessionID)
+    assert.equal((await harness.sessionFor("cto")).session.id, r.sessionID)
+    assert.equal(harness.has(old.session.id), false)
+    const fresh = harness.get(r.sessionID!)
+    assert.equal(fresh.messages.length, 0)
+    assert.deepEqual(fresh.inbox.pending().map((i) => i.message.id), ["m-unread"])
+
+    // Restart: phiên mới vẫn là phiên chính.
+    const again = new Harness({ ...harness.cfg })
+    assert.equal((await again.sessionFor("cto")).session.id, r.sessionID)
   } finally {
     await cleanup()
   }

@@ -27,6 +27,9 @@ export const SUMMARY_PROMPT = `Context is about to be compacted. Write a checkpo
 
 Preserve all opaque identifiers exactly as written: UUIDs, hashes, session IDs, paths, ports, URLs, error messages. Be specific; omit pleasantries.`
 
+/** `/compact <trọng tâm>`: CEO chỉ định phần cần giữ chi tiết. */
+export const SUMMARY_FOCUS = "\n\nThe CEO asked to focus this summary on: {focus}\nKeep everything related to that in full detail; other topics can be shorter."
+
 export const REQUIRED_HEADINGS = ["## Objective", "## Work State", "## Next Move"]
 
 export const SUMMARY_NUDGE =
@@ -116,8 +119,8 @@ export function missingHeadings(text: string) {
 }
 
 /** Pha 3: messages hiện có + summary prompt (cùng prefix → tận dụng cache). Thiếu heading → thử lại 1 lần với nudge. */
-export async function summarize(provider: ProviderClient, model: string, system: string[], messages: Message[], signal: AbortSignal, onUsage?: (u: Usage) => unknown): Promise<string> {
-  const convo = [...messages, userMessage(SUMMARY_PROMPT)]
+export async function summarize(provider: ProviderClient, model: string, system: string[], messages: Message[], signal: AbortSignal, onUsage?: (u: Usage) => unknown, focus?: string): Promise<string> {
+  const convo = [...messages, userMessage(SUMMARY_PROMPT + (focus ? SUMMARY_FOCUS.replace("{focus}", focus) : ""))]
   let text = await once(provider, model, system, convo, signal, onUsage)
   let missing = missingHeadings(text)
   if (missing.length === 0) return text
