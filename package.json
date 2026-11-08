@@ -18,6 +18,7 @@
   "type": "module",
   "scripts": {
     "serve": "tsx src/server/index.ts",
+    "gateway": "tsx src/gateway/index.ts",
     "ui": "tsx scripts/ui-dev.ts",
     "ui:dev": "vite --config ui/vite.config.ts",
     "ui:build": "vite build --config ui/vite.config.ts",

@@ -43,7 +43,11 @@ export class McpManager {
   private clients = new Map<string, McpClient>()
   private status = new Map<string, McpServerStatus>()
 
-  constructor(private db: Db, private tools: ToolRegistry) {}
+  /**
+   * `placeholders`: giá trị thay cho `{{tên}}` trong url/header lúc kết nối (vd `{{license}}` → mã giấy
+   * phép). DB chỉ lưu placeholder nên đổi giấy phép không phải sửa cấu hình, và UI không thấy bí mật.
+   */
+  constructor(private db: Db, private tools: ToolRegistry, private placeholders: Record<string, () => string | undefined> = {}) {}
 
   /** Đọc cấu hình; `connect: false` chỉ nạp trạng thái (test không cần MCP). */
   async load(opts: { connect?: boolean } = {}) {
@@ -126,7 +130,7 @@ export class McpManager {
     st.state = "connecting"
     st.error = undefined
     try {
-      const client = await McpClient.connect(st.config)
+      const client = await McpClient.connect(this.resolved(st.config))
       const tools = await client.listTools()
       this.clients.set(id, client)
       st.serverInfo = client.serverInfo
@@ -137,6 +141,29 @@ export class McpManager {
       st.state = "error"
       st.error = (e as Error).message
     }
+  }
+
+  /** Kết nối lại mọi server http có dùng `{{tên}}` (vd sau khi nhập giấy phép mới). */
+  async reconnectUsing(name: string) {
+    const needle = `{{${name}}}`
+    const ids = Object.entries(this.config.servers)
+      .filter(([, c]) => c.type === "http" && c.enabled !== false && (c.url.includes(needle) || Object.values(c.headers ?? {}).some((v) => v.includes(needle))))
+      .map(([id]) => id)
+    await Promise.allSettled(ids.map((id) => this.reconnect(id)))
+    return ids
+  }
+
+  /** Điền `{{tên}}` trong url/header của server http; thiếu giá trị thì ném lỗi dễ hiểu thay vì gửi chuỗi trống. */
+  private resolved(cfg: McpServerConfig): McpServerConfig {
+    if (cfg.type !== "http") return cfg
+    const fill = (s: string) =>
+      s.replace(/\{\{(\w+)\}\}/g, (_, name: string) => {
+        const v = this.placeholders[name]?.()
+        if (!v) throw new Error(name === "license" ? "Server này cần giấy phép còn hạn. Nhập mã giấy phép ở Cài đặt rồi Kết nối lại." : `mcp: thiếu giá trị cho {{${name}}}`)
+        return v
+      })
+    const headers = cfg.headers ? Object.fromEntries(Object.entries(cfg.headers).map(([k, v]) => [k, fill(v)])) : undefined
+    return { ...cfg, url: fill(cfg.url), headers }
   }
 
   private disconnect(id: string) {

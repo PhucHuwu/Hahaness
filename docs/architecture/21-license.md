@@ -63,4 +63,5 @@ the routes and the install gate end to end with a `requiresLicense` echo server.
 
 - Per-plan entitlements in the catalogue (`plans: ["pro"]` on an item).
 - Vendor-side record of issued licences (today: whatever the vendor keeps alongside the private key).
-- Hosted MCP gateway with per-customer keys (step 5), which is what the first paid catalogue items will point at.
+
+The vendor MCP gateway (`22-gateway.md`) now uses the licence itself as the bearer token for paid catalogue items.

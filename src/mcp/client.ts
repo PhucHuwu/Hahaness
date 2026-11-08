@@ -164,7 +164,7 @@ function httpRpc(cfg: Extract<McpServerConfig, { type: "http" }>): Rpc {
     const res = await fetch(cfg.url, { method: "POST", headers: headers(), body: JSON.stringify(body), signal })
     const sid = res.headers.get("mcp-session-id")
     if (sid) sessionID = sid
-    if (!res.ok) throw new Error(`mcp: HTTP ${res.status} ${res.statusText} from ${cfg.url}`)
+    if (!res.ok) throw new Error(`mcp: HTTP ${res.status} ${res.statusText} from ${cfg.url}${await reason(res)}`)
     return res
   }
   return {
@@ -182,6 +182,17 @@ function httpRpc(cfg: Extract<McpServerConfig, { type: "http" }>): Rpc {
     close() {
       if (sessionID) void fetch(cfg.url, { method: "DELETE", headers: headers() }).catch(() => {})
     },
+  }
+}
+
+/** Lý do lỗi từ body JSON (`{error}` của gateway hay `{error:{message}}` JSON-RPC) để hiện cho CEO. */
+async function reason(res: Response): Promise<string> {
+  try {
+    const j = JSON.parse(await res.text())
+    const m = typeof j?.error === "string" ? j.error : j?.error?.message
+    return typeof m === "string" && m ? `: ${m}` : ""
+  } catch {
+    return ""
   }
 }
 

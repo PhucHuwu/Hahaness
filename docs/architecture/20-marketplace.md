@@ -22,8 +22,9 @@ connected to. The **Chợ ứng dụng** page lists those tools and installs the
   (verified with the project's own `McpClient`): Exa search, Hugging Face Hub, Microsoft Learn, Context7, Cloudflare
   Docs. These need no local process, no package install and no sandboxing, so a non-technical CEO can install them
   safely. `stdio` items are allowed by the schema but should only be published once packages are signed.
-- **Secrets never live in the catalog.** Items that need a key will do so via per-customer headers entered on the MCP
-  page after installation (or via the vendor gateway, step 5), not via values in the shared JSON.
+- **Secrets never live in the catalog.** Paid items point at the vendor gateway with
+  `"Authorization": "Bearer {{license}}"`; the instance fills the placeholder from its own licence at connect time
+  (`22-gateway.md`). Nothing customer-specific is in the shared JSON.
 - **Schema is strict and versioned.** `version: 1`; `id` must be a slug (it is also the MCP server id); unknown
   `kind` values fail validation so an older instance ignores a newer catalog instead of half-installing it. The repo's
   own `catalog.json` is validated in `marketplace.test.ts`.
@@ -70,7 +71,6 @@ no network is needed.
 
 - Signed catalog (detached signature checked against a key baked into the image).
 - `skill` and `agent` item kinds (markdown written into the skill store / staff table).
-- Vendor-hosted MCP gateway with per-customer keys (step 5).
 
 Licence gating is done (`21-license.md`): items with `requiresLicense: true` install only while the instance holds a
 valid key; the view carries `licensed` so the UI can show `cần giấy phép` and link to Settings.

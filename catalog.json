@@ -13,6 +13,17 @@
       "config": { "type": "http", "url": "https://mcp.exa.ai/mcp" }
     },
     {
+      "id": "exa-pro",
+      "kind": "mcp",
+      "title": "Exa Pro – tìm kiếm web qua gói Hahaness",
+      "description": "Bản Exa dùng tài khoản của nhà cung cấp: không giới hạn lượt miễn phí, không cần tự đăng ký key. Kết nối qua gateway Hahaness bằng giấy phép của bạn.",
+      "tags": ["tìm kiếm", "web", "trả phí"],
+      "publisher": "Hahaness",
+      "homepage": "https://github.com/PhucHuwu/Hahaness",
+      "requiresLicense": true,
+      "config": { "type": "http", "url": "https://gateway.hahaness.example/mcp/exa", "headers": { "Authorization": "Bearer {{license}}" } }
+    },
+    {
       "id": "huggingface",
       "kind": "mcp",
       "title": "Hugging Face Hub",

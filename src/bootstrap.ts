@@ -9,6 +9,8 @@ import { Db } from "./core/db.ts"
 import { DocumentStore } from "./context/documents.ts"
 import { SkillStore } from "./context/skills.ts"
 import { McpManager } from "./mcp/manager.ts"
+import { LicenseStore } from "./server/license.ts"
+import { instanceID } from "./server/updates.ts"
 import * as workspace from "./context/workspace.ts"
 import { documentTools } from "./tool/builtin/fs.ts"
 import { bash } from "./tool/builtin/bash.ts"
@@ -42,6 +44,9 @@ export interface App {
   tools: ToolRegistry
   skills: SkillStore
   mcp: McpManager
+  /** Mã cài đặt (xem `docs/architecture/19-updates.md`). */
+  instance: string
+  license: LicenseStore
   harness: Harness
   scheduler: Scheduler
   telegram: TelegramChannel
@@ -63,6 +68,8 @@ export interface BootstrapOptions {
   recover?: boolean
   /** false → không kết nối Telegram lúc khởi động (test). */
   channels?: boolean
+  /** Khoá công khai kiểm giấy phép (base64 SPKI); mặc định khoá của nhà cung cấp (test dùng khoá riêng). */
+  licensePublicKey?: string
 }
 
 export function defaultDbPath(cwd: string) {
@@ -91,8 +98,11 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
   const agents = (await new AgentRegistry().load(join(here, "agent", "builtin"))).useDb(db)
   const skills = new SkillStore(db)
 
+  const instance = instanceID(db)
+  const license = new LicenseStore({ db, instance, publicKey: opts.licensePublicKey })
   const tools = new ToolRegistry()
-  const mcp = new McpManager(db, tools)
+  // Server MCP qua gateway của nhà cung cấp xác thực bằng chính giấy phép (`{{license}}` trong header).
+  const mcp = new McpManager(db, tools, { license: () => (license.active() ? license.key() : undefined) })
   const scheduler = new Scheduler({ db, agents, tools, blocked: () => app.providerError, onChange: opts.onScheduleChange })
   tools.register(
     ...documentTools(docs),
@@ -151,7 +161,7 @@ export async function bootstrap(opts: BootstrapOptions): Promise<App> {
     mcp.closeAll()
     db.close()
   }
-  const app: App = { cwd, workdir, db, docs, config, providerError, agents, tools, skills, mcp, harness, scheduler, telegram, close }
+  const app: App = { cwd, workdir, db, docs, config, providerError, agents, tools, skills, mcp, instance, license, harness, scheduler, telegram, close }
   if (opts.scheduler !== false) scheduler.start()
   if (opts.channels !== false) telegram.start()
   // Làm tiếp việc dở từ trước khi tắt (không chờ ai mở web). Chưa cấu hình provider thì lượt sẽ lỗi → để sau.

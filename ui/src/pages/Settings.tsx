@@ -268,7 +268,7 @@ function LicenseCard() {
         <h2>Giấy phép</h2>
         {badge}
       </div>
-      <p className="small muted">Giấy phép mở các công cụ trả phí trong Chợ ứng dụng. Không có hay hết hạn thì hệ thống và công cụ đã cài vẫn dùng bình thường.</p>
+      <p className="small muted">Giấy phép mở các công cụ trả phí trong Chợ ứng dụng và là chìa khoá để công cụ của nhà cung cấp kết nối. Không có hay hết hạn thì hệ thống và các công cụ còn lại vẫn dùng bình thường.</p>
       {error && <div className="notice err small">{error}</div>}
       {st && (
         <>

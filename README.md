@@ -89,6 +89,9 @@ Paid marketplace items need a licence key tied to the instance ID shown in Setti
 `npx tsx scripts/license.ts sign --instance <uuid> --plan pro --expires 2027-01-01 --key vendor.pem`; the private key is
 never in this repository or in the image (see [21-license](docs/architecture/21-license.md)).
 
+Paid items connect through the vendor's MCP gateway (`npm run gateway`, `gateway/`), which checks the licence and
+adds the vendor's upstream API keys from `gateway/.env` (see [22-gateway](docs/architecture/22-gateway.md)).
+
 ## Development
 
 ```sh
@@ -127,3 +130,4 @@ The design borrows from [hermes-agent](docs/research/01-hermes-agent.md), [openc
 | [19-updates](docs/architecture/19-updates.md) | Instance ID, version reporting, daily "new version" check and notice |
 | [20-marketplace](docs/architecture/20-marketplace.md) | "Chợ ứng dụng": static `catalog.json`, one-click install of hosted MCP servers |
 | [21-license](docs/architecture/21-license.md) | Ed25519-signed licence key tied to the instance ID; unlocks paid marketplace items, verified offline |
+| [22-gateway](docs/architecture/22-gateway.md) | Vendor MCP gateway: the licence is the bearer token, `{{license}}` placeholders, upstream keys stay with the vendor |

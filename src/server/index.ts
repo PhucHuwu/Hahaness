@@ -9,9 +9,8 @@ import { chatRoutes, sessionView } from "./routes-chat.ts"
 import { adminRoutes } from "./routes-admin.ts"
 import { scheduleRoutes } from "./routes-schedule.ts"
 import { Auth, AuthError, MIN_PASSWORD, sameOrigin } from "./auth.ts"
-import { UpdateChecker, instanceID } from "./updates.ts"
+import { UpdateChecker } from "./updates.ts"
 import { Marketplace } from "./marketplace.ts"
-import { LicenseStore } from "./license.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, "..", "..")
@@ -72,6 +71,7 @@ export async function startServer(opts: ServerOptions) {
     scheduler: opts.scheduler,
     recover: opts.recover,
     channels: opts.channels,
+    licensePublicKey: opts.licensePublicKey,
     onScheduleChange: (scheduleID) => bus.emit({ type: "schedule", id: scheduleID }),
     askHandler: async (req) => {
       const a = await ask(req.sessionID, "permission", `${req.agent} wants to ${req.action} ${req.resource}`, ["Allow", "Deny"])
@@ -92,10 +92,9 @@ export async function startServer(opts: ServerOptions) {
 
   const auth = new Auth(app.db)
   const authOn = opts.auth !== false
-  const instance = instanceID(app.db)
+  const { instance, license } = app
   const updates = new UpdateChecker({ current: VERSION, instance, url: process.env.HAHANESS_UPDATE_URL, channel: process.env.HAHANESS_UPDATE_CHANNEL })
   if (opts.updates !== false) updates.start()
-  const license = new LicenseStore({ db: app.db, instance, publicKey: opts.licensePublicKey })
   const market = new Marketplace({ mcp: app.mcp, bundledPath: join(root, "catalog.json"), url: opts.catalogUrl ?? process.env.HAHANESS_CATALOG_URL, licensed: () => license.active() })
   const router = new Router()
   const wrap = (fn: () => unknown) => {
@@ -137,14 +136,19 @@ export async function startServer(opts: ServerOptions) {
   router.put("/api/license", async (req) => {
     const b = await req.json<{ key?: string }>()
     if (!b.key?.trim()) throw new HttpError(400, "Cần mã giấy phép.")
+    let st
     try {
-      return { instance, ...license.set(b.key) }
+      st = license.set(b.key)
     } catch (e) {
       throw new HttpError(400, (e as Error).message)
     }
+    // Server qua gateway của nhà cung cấp xác thực bằng giấy phép → nối lại với key mới.
+    await app.mcp.reconnectUsing("license")
+    return { instance, ...st }
   })
-  router.delete("/api/license", () => {
+  router.delete("/api/license", async () => {
     license.clear()
+    await app.mcp.reconnectUsing("license")
     return { instance, ...license.status() }
   })
   router.get("/api/marketplace", () => market.view())

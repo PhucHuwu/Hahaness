@@ -1,0 +1,15 @@
+# Vendor side only. Run from this directory: docker compose up -d
+# Put the upstream API keys in gateway/.env (never commit it).
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: gateway/Dockerfile
+    image: hahaness-gateway:local
+    restart: unless-stopped
+    # Put Caddy or nginx with HTTPS in front; customers reach it at https://gateway.<vendor>/mcp/<name>.
+    ports:
+      - "127.0.0.1:7332:7332"
+    env_file:
+      - path: .env
+        required: false

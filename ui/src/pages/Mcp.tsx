@@ -83,7 +83,17 @@ export function Mcp() {
               </div>
             </div>
             <div className="small mono muted">{s.config.type === "stdio" ? `${s.config.command} ${(s.config.args ?? []).join(" ")}` : s.config.url}</div>
-            {s.error && <div className="notice err small">{s.error}</div>}
+            {s.error && (
+              <div className="notice err small">
+                {s.error}
+                {s.error.includes("giấy phép") && (
+                  <>
+                    {" "}
+                    <a href="#settings">Mở Cài đặt</a>
+                  </>
+                )}
+              </div>
+            )}
             {s.state === "connected" && (
               <table>
                 <thead>
