@@ -183,6 +183,17 @@ export interface ConfigView {
   env: { OPENAI_API_KEY: boolean; ANTHROPIC_API_KEY?: boolean; HAHANESS_MODEL: string | null }
 }
 
+/** GET /api/updates: bản đang chạy và bản mới nhất (kiểm tra mỗi 24 giờ). */
+export interface UpdateState {
+  current: string
+  channel: string
+  enabled: boolean
+  latest: { version: string; url?: string; notes?: string } | null
+  available: boolean
+  checkedAt: string | null
+  error: string | null
+}
+
 export interface DocView {
   path: string
   size: number

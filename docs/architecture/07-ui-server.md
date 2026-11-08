@@ -81,7 +81,8 @@ Example stdio server: `examples/mcp/echo-server.ts`. End-to-end test: `server.te
 - One neutral palette + one accent color, system font, no gradients/glass/emoji in the UI. Every control has real behavior; empty/error/loading states are real (see the `antislop-ui` skill).
 - Chat: session list, transcript (tool calls are collapsed `<details>`), child employees with links to their sessions, question/permission box, Stop, `@employee` suggestions.
 - Settings: default model, providers (OpenAI-compatible / custom module), API keys masked (`••••`) and kept unchanged if sent back, "Test call" (Gọi thử).
-- `npm run ui` = API server (7331) + Vite dev (5173, proxy `/api`). `npm run ui:build` → `ui/dist`, `npm run serve` serves it statically.
+- `npm run ui` = API server (7331) + Vite dev (5173, proxy `/api`). `npm run ui:build` → `ui/dist`, `npm run serve` serves it statically. Docker packaging is in `18-deployment.md`.
+- `GET /api/health` reports `version` and `instance`; `GET /api/updates` and `POST /api/updates/check` back the "Có bản mới" notice (`19-updates.md`).
 
 ## Current limitations
 

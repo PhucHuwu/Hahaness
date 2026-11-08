@@ -7,7 +7,7 @@ import { Skills } from "./pages/Skills.tsx"
 import { Mcp } from "./pages/Mcp.tsx"
 import { Schedules } from "./pages/Schedules.tsx"
 import { useConnectionState } from "./events.ts"
-import { api, onUnauthorized } from "./api.ts"
+import { api, onUnauthorized, type UpdateState } from "./api.ts"
 import { Login, type AuthState } from "./pages/Login.tsx"
 
 const PAGES = [
@@ -53,9 +53,22 @@ export function App() {
   return <Shell />
 }
 
+/** Hỏi server có bản mới không (server tự kiểm tra mỗi 24 giờ); hỏi lại mỗi giờ khi tab mở lâu. */
+function useUpdate() {
+  const [u, setU] = useState<UpdateState>()
+  useEffect(() => {
+    const load = () => void api.get<UpdateState>("/api/updates").then(setU, () => {})
+    load()
+    const t = setInterval(load, 60 * 60 * 1000)
+    return () => clearInterval(t)
+  }, [])
+  return u
+}
+
 function Shell() {
   const { page, arg } = useHash()
   const conn = useConnectionState()
+  const update = useUpdate()
   return (
     <div className="shell">
       <nav className="nav">
@@ -66,6 +79,11 @@ function Shell() {
           </a>
         ))}
         <div className="foot">
+          {update?.available && (
+            <a href="#settings" className="update" title={`Đang chạy ${update.current}`}>
+              Có bản mới {update.latest?.version}
+            </a>
+          )}
           <span className={`dot ${conn === "open" ? "on" : conn === "closed" ? "err" : ""}`} />
           {conn === "open" ? "Đã kết nối" : conn === "closed" ? "Mất kết nối server" : "Đang kết nối…"}
         </div>

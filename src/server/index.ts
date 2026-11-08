@@ -9,6 +9,7 @@ import { chatRoutes, sessionView } from "./routes-chat.ts"
 import { adminRoutes } from "./routes-admin.ts"
 import { scheduleRoutes } from "./routes-schedule.ts"
 import { Auth, AuthError, MIN_PASSWORD, sameOrigin } from "./auth.ts"
+import { UpdateChecker, instanceID } from "./updates.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, "..", "..")
@@ -30,6 +31,8 @@ export interface ServerOptions {
   channels?: boolean
   /** false → không cần đăng nhập (test). Mặc định bật. */
   auth?: boolean
+  /** false → không tự kiểm tra bản mới (test). Mặc định bật; HAHANESS_UPDATE_URL=off cũng tắt. */
+  updates?: boolean
 }
 
 /**
@@ -83,6 +86,9 @@ export async function startServer(opts: ServerOptions) {
 
   const auth = new Auth(app.db)
   const authOn = opts.auth !== false
+  const instance = instanceID(app.db)
+  const updates = new UpdateChecker({ current: VERSION, instance, url: process.env.HAHANESS_UPDATE_URL, channel: process.env.HAHANESS_UPDATE_CHANNEL })
+  if (opts.updates !== false) updates.start()
   const router = new Router()
   const wrap = (fn: () => unknown) => {
     try {
@@ -116,7 +122,9 @@ export async function startServer(opts: ServerOptions) {
     auth.logoutOthers(req.raw)
     return { ok: true, sessions: auth.sessionCount() }
   })
-  router.get("/api/health", () => ({ ok: true, version: VERSION, db: app.db.path, providerError: app.providerError ?? null, clients: bus.size }))
+  router.get("/api/health", () => ({ ok: true, version: VERSION, instance, db: app.db.path, providerError: app.providerError ?? null, clients: bus.size }))
+  router.get("/api/updates", () => updates.state)
+  router.post("/api/updates/check", () => updates.check())
   router.get("/api/events", (_req, res) => {
     bus.subscribe(res)
   })
@@ -158,6 +166,7 @@ export async function startServer(opts: ServerOptions) {
   await new Promise<void>((resolve) => server.listen(port, host, resolve))
   const close = () =>
     new Promise<void>((resolve) => {
+      updates.stop()
       bus.closeAll()
       server.closeAllConnections?.()
       server.close(() => {
@@ -165,7 +174,7 @@ export async function startServer(opts: ServerOptions) {
         resolve()
       })
     })
-  return { app, server, auth, url: `http://${host}:${port}`, hasUI, close }
+  return { app, server, auth, updates, url: `http://${host}:${port}`, hasUI, close }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

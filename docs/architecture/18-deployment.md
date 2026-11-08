@@ -32,8 +32,9 @@ vendor-side pieces (update channel, marketplace catalog, licensing) are later st
   ships `tzdata` so any IANA name works.
 - **Health check** calls `GET /api/auth`, the only GET that answers without a login session, so the check works before
   the password is set. `docker ps` shows `healthy`/`unhealthy`; the later update sidecar will use the same signal.
-- **Version is reported.** `GET /api/health` now includes `version` (from `package.json`), and the startup log prints
-  `Hahaness <version>: <url>`. The update check in the next step compares this against the vendor's latest.
+- **Version is reported.** `GET /api/health` includes `version` (from `package.json`) and `instance`, and the startup
+  log prints `Hahaness <version>: <url>`. The daily update check (`19-updates.md`) compares this against the latest
+  release and the UI shows "Có bản mới".
 - **Secrets stay out of the image.** `.env` (gitignored, listed in `.dockerignore`) is read by compose through
   `env_file` and is optional; API keys can equally be entered in Settings and are then stored in the DB inside the volume.
   `.env.example` documents the variables.
@@ -85,6 +86,5 @@ docker compose restart hahaness   # prints a new setup code
 ## Not done yet
 
 - Published images on a registry with `stable`/`beta` tags; today the compose file builds locally (`build: .`).
-- An instance ID in `/api/health` for licensing.
 - Running `bash` commands in a nested sandbox (`--network none`); inside the container they still run with the
   server's permissions, as `15-bash.md` describes.

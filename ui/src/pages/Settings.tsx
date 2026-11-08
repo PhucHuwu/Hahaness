@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { AccountCard } from "./Login.tsx"
-import { api, type Config, type ConfigView, type ProviderConfig, type TelegramStatus } from "../api.ts"
+import { api, type Config, type ConfigView, type ProviderConfig, type TelegramStatus, type UpdateState } from "../api.ts"
 
 export function Settings() {
   const [view, setView] = useState<ConfigView>()
@@ -140,6 +140,7 @@ export function Settings() {
           <p className="small muted">Phiên chat đang mở vẫn dùng model cũ; phiên mới sẽ dùng cấu hình này.</p>
           <TelegramCard />
           <AccountCard />
+          <UpdateCard />
         </div>
       )}
     </div>
@@ -221,6 +222,67 @@ function ProviderCard({ id, p, onChange, onRename, onRemove }: { id: string; p: 
           <input type="text" className="mono" value={p.module} onChange={(e) => onChange({ ...p, module: e.target.value })} />
         </label>
       )}
+    </div>
+  )
+}
+
+/** Bản đang chạy và bản mới nhất. Không tự cập nhật: người quản trị chạy `docker compose pull && up -d`. */
+function UpdateCard() {
+  const [st, setSt] = useState<UpdateState>()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const run = async (fn: () => Promise<UpdateState>) => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      setSt(await fn())
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  useEffect(() => void run(() => api.get<UpdateState>("/api/updates")), [])
+
+  return (
+    <div className="card stack">
+      <div className="row between">
+        <h2>Phiên bản</h2>
+        {st?.available ? <span className="badge warn">có bản mới</span> : st?.enabled && st.checkedAt && !st.error ? <span className="badge ok">mới nhất</span> : null}
+      </div>
+      {error && <div className="notice err small">{error}</div>}
+      {st && (
+        <div className="row between">
+          <span>
+            Đang chạy <b className="mono">{st.current}</b>
+            {st.available && st.latest && (
+              <>
+                , bản mới nhất <b className="mono">{st.latest.version}</b>
+                {st.latest.url && (
+                  <>
+                    {" "}
+                    (<a href={st.latest.url} target="_blank" rel="noreferrer">ghi chú phát hành</a>)
+                  </>
+                )}
+              </>
+            )}
+            .
+          </span>
+          {st.enabled && (
+            <button className="btn small" disabled={busy} onClick={() => run(() => api.post<UpdateState>("/api/updates/check"))}>
+              {busy ? "Đang kiểm tra…" : "Kiểm tra ngay"}
+            </button>
+          )}
+        </div>
+      )}
+      {st?.error && <div className="small" style={{ color: "var(--err)" }}>Không kiểm tra được bản mới: {st.error}</div>}
+      {st && !st.enabled && <div className="small muted">Đã tắt kiểm tra bản mới (HAHANESS_UPDATE_URL=off).</div>}
+      {st?.available && (
+        <div className="small muted">
+          Để cập nhật, người quản trị chạy trên máy chủ: <code>docker compose pull &amp;&amp; docker compose up -d</code>. Nên sao lưu dữ liệu trước.
+        </div>
+      )}
+      {st?.enabled && st.checkedAt && <div className="small muted">Kiểm tra lần cuối: {new Date(st.checkedAt).toLocaleString("vi-VN")}. Tự kiểm tra mỗi ngày.</div>}
     </div>
   )
 }

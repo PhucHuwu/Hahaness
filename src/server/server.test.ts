@@ -21,7 +21,7 @@ before(async () => {
   const seed = new Db(dbPath)
   saveConfig(seed, { defaultModel: "scripted/any", providers: { scripted: { type: "custom", module: join(root, "examples", "providers", "scripted.ts") } } })
   seed.close()
-  const s = await startServer({ cwd: dir, dbPath, port: 0, uiDir: join(dir, "no-ui"), auth: false })
+  const s = await startServer({ cwd: dir, dbPath, port: 0, uiDir: join(dir, "no-ui"), auth: false, updates: false })
   base = `http://127.0.0.1:${(s.server.address() as { port: number }).port}`
   app = s.app
   close = s.close
@@ -69,9 +69,14 @@ async function waitEvent(pred: (ev: any) => boolean, ms = 10_000): Promise<any> 
 }
 
 test("health + config: providers come from the DB settings", async () => {
-  const h = await get<{ ok: boolean; version: string; providerError: string | null; db: string }>("/api/health")
+  const h = await get<{ ok: boolean; version: string; instance: string; providerError: string | null; db: string }>("/api/health")
   assert.equal(h.ok, true)
   assert.match(h.version, /^\d+\.\d+\.\d+/)
+  assert.match(h.instance, /^[0-9a-f-]{36}$/)
+  assert.equal(app.db.getSetting<{ id: string }>("instance")?.id, h.instance, "instance ID is persisted")
+  const u = await get<{ current: string; enabled: boolean; available: boolean; latest: unknown }>("/api/updates")
+  assert.equal(u.current, h.version)
+  assert.equal(u.available, false)
   assert.equal(h.providerError, null)
   assert.equal(h.db, join(dir, "data", "company.db"))
   const c = await get<{ providers: string[]; defaultModel: string; config: { defaultModel?: string } }>("/api/config")
