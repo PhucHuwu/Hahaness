@@ -40,5 +40,7 @@ file tricks the agent into running commands. Current mitigations:
 - Working directory separate from the source code.
 - Employees must be granted permission explicitly.
 
-On a VPS, run the server as a separate low-privilege user, or in a container. Next step, if
-needed: run commands in Docker (`--network none`, mount each `workspace`), keeping the tool's interface unchanged.
+On a VPS, run the server as a separate low-privilege user, or in a container. The Docker image (`18-deployment.md`)
+does the latter: it runs as the `node` user, ships `bash`, `python3`, `pandas` and `openpyxl`, and `pip install --user`
+lands in `/data/workspace/.local` so it survives upgrades. Next step, if needed: run commands in a nested sandbox
+(`--network none`, mount each `workspace`), keeping the tool's interface unchanged.

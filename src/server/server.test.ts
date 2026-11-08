@@ -69,8 +69,9 @@ async function waitEvent(pred: (ev: any) => boolean, ms = 10_000): Promise<any> 
 }
 
 test("health + config: providers come from the DB settings", async () => {
-  const h = await get<{ ok: boolean; providerError: string | null; db: string }>("/api/health")
+  const h = await get<{ ok: boolean; version: string; providerError: string | null; db: string }>("/api/health")
   assert.equal(h.ok, true)
+  assert.match(h.version, /^\d+\.\d+\.\d+/)
   assert.equal(h.providerError, null)
   assert.equal(h.db, join(dir, "data", "company.db"))
   const c = await get<{ providers: string[]; defaultModel: string; config: { defaultModel?: string } }>("/api/config")

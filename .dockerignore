@@ -1,0 +1,11 @@
+.git
+.github
+node_modules
+.hahaness
+.env
+docs
+ui/dist
+ui/node_modules
+*.test.ts
+Dockerfile
+docker-compose.yml

@@ -48,6 +48,18 @@ The UI is in Vietnamese and has seven pages: Chat, Results, Knowledge, Skills, S
 
 ## Running in production
 
+### Docker (recommended)
+
+```sh
+cp .env.example .env     # optional: API keys, time zone
+docker compose up -d --build
+docker compose logs      # read the setup code, then open http://localhost:7331
+```
+
+All company data lives in the `hahaness-data` volume (`/data` in the container). The port is bound to `127.0.0.1`; put Caddy or nginx with HTTPS in front. Details, backup and upgrade steps are in [18-deployment](docs/architecture/18-deployment.md).
+
+### Without Docker
+
 ```sh
 npm run ui:build   # build the static UI into ui/dist
 npm run serve      # serve API + UI on http://127.0.0.1:7331
@@ -64,7 +76,8 @@ The server listens on `127.0.0.1` by default. Set `HOST=0.0.0.0` to expose it, p
 | `HAHANESS_MODEL` | Overrides the default model (`provider/model`). |
 | `OPENAI_API_KEY`, `OPENAI_BASE_URL` | Fallback OpenAI-compatible provider when none is configured in Settings. |
 | `ANTHROPIC_API_KEY` | Fallback Anthropic provider. |
-| `HOST`, `PORT` | Bind address and port of the server (default `127.0.0.1:7331`). |
+| `HOST`, `PORT` | Bind address and port of the server (default `127.0.0.1:7331`; the Docker image sets `HOST=0.0.0.0`). |
+| `TZ` | Time zone for schedules (`docker-compose.yml` defaults to `Asia/Ho_Chi_Minh`). |
 
 Back up or move a company by copying its database file.
 
@@ -102,3 +115,4 @@ The design borrows from [hermes-agent](docs/research/01-hermes-agent.md), [openc
 | [15-bash](docs/architecture/15-bash.md) | Running code in a private working directory without leaking secrets |
 | [16-auth](docs/architecture/16-auth.md) | Single-password login, setup code, session cookie, CSRF and brute-force protection |
 | [17-slash-commands](docs/architecture/17-slash-commands.md) | `/help`, `/stop`, `/compact`, `/new` and other chat commands on web and Telegram |
+| [18-deployment](docs/architecture/18-deployment.md) | Docker image and compose file, data volume, reverse proxy, backup and upgrades |

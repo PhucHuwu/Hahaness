@@ -1,0 +1,20 @@
+services:
+  hahaness:
+    build: .
+    image: hahaness:local
+    restart: unless-stopped
+    # Bound to localhost: put Caddy or nginx with HTTPS in front (docs/architecture/18-deployment.md).
+    # Use "7331:7331" to expose it directly on a trusted network.
+    ports:
+      - "127.0.0.1:7331:7331"
+    volumes:
+      - hahaness-data:/data
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Schedules run in this time zone.
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+
+volumes:
+  hahaness-data:

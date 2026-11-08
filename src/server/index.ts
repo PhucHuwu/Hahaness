@@ -1,7 +1,7 @@
 import { createServer } from "node:http"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { bootstrap } from "../bootstrap.ts"
 import { id } from "../core/id.ts"
 import { Router, SseBus, json, serveStatic, HttpError } from "./http.ts"
@@ -11,6 +11,8 @@ import { scheduleRoutes } from "./routes-schedule.ts"
 import { Auth, AuthError, MIN_PASSWORD, sameOrigin } from "./auth.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
+const root = join(here, "..", "..")
+export const VERSION: string = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version
 
 export interface ServerOptions {
   cwd: string
@@ -114,7 +116,7 @@ export async function startServer(opts: ServerOptions) {
     auth.logoutOthers(req.raw)
     return { ok: true, sessions: auth.sessionCount() }
   })
-  router.get("/api/health", () => ({ ok: true, db: app.db.path, providerError: app.providerError ?? null, clients: bus.size }))
+  router.get("/api/health", () => ({ ok: true, version: VERSION, db: app.db.path, providerError: app.providerError ?? null, clients: bus.size }))
   router.get("/api/events", (_req, res) => {
     bus.subscribe(res)
   })
@@ -133,7 +135,7 @@ export async function startServer(opts: ServerOptions) {
   adminRoutes(router, app)
   scheduleRoutes(router, app)
 
-  const uiDir = opts.uiDir ?? join(here, "..", "..", "ui", "dist")
+  const uiDir = opts.uiDir ?? join(root, "ui", "dist")
   const hasUI = existsSync(join(uiDir, "index.html"))
 
   const server = createServer(async (req, res) => {
@@ -168,7 +170,7 @@ export async function startServer(opts: ServerOptions) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const { url, hasUI, app, auth } = await startServer({ cwd: process.cwd(), port: Number(process.env.PORT ?? 7331), host: process.env.HOST })
-  console.log(`Hahaness server: ${url}${hasUI ? "" : "  (API only — run \`npm run ui\` for the interface)"}`)
+  console.log(`Hahaness ${VERSION}: ${url}${hasUI ? "" : "  (API only — run \`npm run ui\` for the interface)"}`)
   console.log(`Company data: ${app.db.path}`)
   logSetup(auth)
   if (app.providerError) console.log(`Provider: ${app.providerError} — configure in Settings.`)
