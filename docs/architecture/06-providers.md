@@ -2,7 +2,7 @@
 
 ## Interface
 
-Harness chỉ phụ thuộc vào một interface nhỏ (`src/provider/types.ts`):
+The harness depends only on a small interface (`src/provider/types.ts`):
 
 ```ts
 interface ProviderClient {
@@ -12,17 +12,17 @@ interface ProviderClient {
 // StreamEvent: text-delta | reasoning-delta | tool-call | finish | error
 ```
 
-Mọi thứ provider-specific (wire format, SSE parse, tool-call accumulate, usage) nằm trong implementation. Loop không biết OpenAI hay Anthropic.
+Everything provider-specific (wire format, SSE parsing, tool-call accumulation, usage) lives in the implementation. The loop does not know whether it is talking to OpenAI or Anthropic.
 
-## Tham chiếu model
+## Model references
 
-Model luôn viết dạng `providerID/modelID` (`openrouter/anthropic/claude-sonnet-4.5` — chỉ tách ở `/` đầu). Không có prefix → provider mặc định (provider của `defaultModel`). `ProviderRegistry.resolve()` kiểm tra lúc tạo session nên lỗi config lộ sớm, không đợi tới lúc gọi model.
+Models are always written as `providerID/modelID` (`openrouter/anthropic/claude-sonnet-4.5` — split only at the first `/`). No prefix → the default provider (the provider of `defaultModel`). `ProviderRegistry.resolve()` checks at session creation, so config errors surface early instead of at model-call time.
 
-Agent khai báo `model: [a/x, b/y]` là danh sách dự phòng. Config công ty có thêm `fallbackModels: ["b/y", …]`, chỉnh ở Cài đặt. Model chính lỗi hẳn thì loop chuyển sang model kế tiếp; chi tiết ở `01-agent-loop.md` mục "Model dự phòng".
+An agent declaring `model: [a/x, b/y]` gets a fallback list. The company config also has `fallbackModels: ["b/y", …]`, edited in **Settings** (Cài đặt). When the primary model fails outright, the loop switches to the next model; details in `01-agent-loop.md`, "Fallback models" under "Retry & provider errors".
 
 ## Config
 
-Lưu trong DB (bảng `settings`, key `config`; xem `08-storage.md`), CEO sửa ở trang **Cài đặt**. Đây là nguồn cấu hình duy nhất: không đọc file cấu hình nào (`hahaness.json`, `~/.hahaness/config.json` đã bỏ). Test seed bằng `saveConfig(db, …)`. Hình dạng JSON:
+Stored in the DB (table `settings`, key `config`; see `08-storage.md`); the CEO edits it on the **Settings** page. This is the only configuration source: no config file is read (`hahaness.json`, `~/.hahaness/config.json` were dropped). Tests seed with `saveConfig(db, …)`. JSON shape:
 
 ```json
 {
@@ -36,44 +36,44 @@ Lưu trong DB (bảng `settings`, key `config`; xem `08-storage.md`), CEO sửa 
 }
 ```
 
-- `{env:NAME}` được thay bằng biến môi trường ở `apiKey` và `headers`. Key thật nhập ở Cài đặt nằm trong file `.db` (đừng chia sẻ file đó); API không bao giờ trả key ra UI.
-- `contextWindow` / `maxOutput` quyết định budget và compaction. Thứ tự: `models.<id>` → khai ở cấp provider (áp cho mọi model của provider, ô "Context tối đa" / "Trả lời tối đa" trong Cài đặt) → mặc định 128k (openai) / 200k (anthropic) và 16k. Mức cấp provider dành cho proxy gom nhiều model (vd CLIProxyAPI): đặt một trần chung, vd `"contextWindow": 200000` → compact quanh 170k (trần trừ max(15%, 16k)). Trần này không được vượt context thật của model; nếu vượt, provider báo overflow và loop compact rồi gửi lại.
-- Không có config → dùng `OPENAI_API_KEY` + `OPENAI_BASE_URL` từ env (provider id `openai`); không có thì dùng `ANTHROPIC_API_KEY` (provider id `anthropic`).
+- `{env:NAME}` is replaced with the environment variable in `apiKey` and `headers`. Real keys entered in Settings live in the `.db` file (do not share that file); the API never returns keys to the UI.
+- `contextWindow` / `maxOutput` drive the budget and compaction. Precedence: `models.<id>` → provider-level value (applies to every model of the provider; the "Max context" (Context tối đa) / "Max response" (Trả lời tối đa) fields in Settings) → default 128k (openai) / 200k (anthropic) and 16k. The provider-level value is meant for proxies that aggregate many models (e.g. CLIProxyAPI): set one shared ceiling, e.g. `"contextWindow": 200000` → compaction around 170k (ceiling minus max(15%, 16k)). This ceiling must not exceed the model's real context; if it does, the provider reports overflow and the loop compacts and resends.
+- No config → use `OPENAI_API_KEY` + `OPENAI_BASE_URL` from env (provider id `openai`); if absent, use `ANTHROPIC_API_KEY` (provider id `anthropic`).
 
-## Ba loại provider
+## Three provider types
 
 ### `type: "openai"`
-Bất kỳ endpoint nào nói Chat Completions + SSE: OpenAI, OpenRouter, Groq, Together, DeepSeek, Ollama, vLLM, LM Studio, LiteLLM proxy, Azure (qua baseURL + headers). Đây là cách nhanh nhất để nối gateway nội bộ.
+Any endpoint that speaks Chat Completions + SSE: OpenAI, OpenRouter, Groq, Together, DeepSeek, Ollama, vLLM, LM Studio, LiteLLM proxy, Azure (via baseURL + headers). This is the fastest way to connect an internal gateway.
 
 ### `type: "anthropic"` (`src/provider/anthropic.ts`)
-Anthropic Messages API (`POST {baseURL}/v1/messages`, SSE). `apiKey` mặc định `ANTHROPIC_API_KEY`; `baseURL` có hay không có `/v1` đều được.
+Anthropic Messages API (`POST {baseURL}/v1/messages`, SSE). `apiKey` defaults to `ANTHROPIC_API_KEY`; `baseURL` works with or without `/v1`.
 
-- **Prompt cache**: `cache_control: ephemeral` ở block system cuối, tool cuối và block cuối của message cuối, tổng 3 trên 4 breakpoint cho phép. System đóng băng trong phiên nên từ lượt thứ hai prefix trúng cache.
-- **Map message**: role phải luân phiên user/assistant. Message `system` giữa phiên (notice, `<workspace-update>`) được gộp vào user. `tool_result` nằm trong message user ngay sau `tool_use` và đứng trước text. Reasoning không gửi lại, vì không có chữ ký thinking.
-- **Usage**: `inputTokens = input_tokens + cache_read + cache_creation`. Anthropic tách phần trúng cache ra, mà loop cần tổng prompt để quyết định compaction. `outputTokens` lấy từ `message_delta`.
-- **Lỗi**: 429/529/5xx và `overloaded_error` trong stream → retryable, kèm `retry-after`. Body lỗi JSON được rút gọn thành `type: message`, nên "prompt is too long" được `isOverflow` nhận ra.
-- `contextWindow` mặc định 200k; đổi ở cấp provider hoặc `models.<id>`.
+- **Prompt cache**: `cache_control: ephemeral` on the last system block, the last tool and the last block of the last message — 3 of the 4 allowed breakpoints. The system prompt is frozen for the session, so from the second turn on the prefix hits the cache.
+- **Message mapping**: roles must alternate user/assistant. Mid-session `system` messages (notice, `<workspace-update>`) are merged into the user message. `tool_result` goes in the user message right after `tool_use`, before any text. Reasoning is not sent back, because there is no thinking signature.
+- **Usage**: `inputTokens = input_tokens + cache_read + cache_creation`. Anthropic reports the cached part separately, but the loop needs the total prompt size to decide on compaction. `outputTokens` comes from `message_delta`.
+- **Errors**: 429/529/5xx and `overloaded_error` in the stream → retryable, with `retry-after`. JSON error bodies are reduced to `type: message`, so "prompt is too long" is recognized by `isOverflow`.
+- `contextWindow` defaults to 200k; change it at provider level or in `models.<id>`.
 
 ### `type: "custom"`
-Module TS/JS do người dùng viết, export default một factory:
+A user-written TS/JS module that default-exports a factory:
 
 ```ts
 export default function create(options, { id, cwd }): ProviderClient | Promise<ProviderClient>
 ```
 
-Dùng khi wire format khác (Anthropic Messages, Gemini, Bedrock, gRPC nội bộ) hoặc cần logic riêng (ký request, cache, rate-limit, log). Module được `import()` lúc khởi động; đường dẫn tương đối tính từ cwd. Mẫu: `examples/providers/echo.ts`.
+Use it when the wire format differs (Anthropic Messages, Gemini, Bedrock, internal gRPC) or custom logic is needed (request signing, caching, rate limiting, logging). The module is `import()`ed at startup; relative paths resolve from cwd. Example: `examples/providers/echo.ts`.
 
-Hợp đồng provider phải giữ:
-1. `tool-call` chỉ yield khi args đã hoàn chỉnh (parse JSON xong); args hỏng thì bọc `{ __raw }` để validation báo lỗi cho model thay vì crash.
-2. `finish.usage.inputTokens` phải là số thật từ provider — loop dùng nó làm `measured` để re-anchor ước lượng token.
-3. Lỗi mạng/429/5xx → `error { retryable: true }`; 401/403/400 → `retryable: false`. Context quá dài → message chứa "context" hoặc "too long" để loop nhận ra và compaction.
-4. Tôn trọng `signal`: hủy fetch, dừng yield.
+Contract the provider must uphold:
+1. Yield `tool-call` only once args are complete (JSON parsed); wrap broken args as `{ __raw }` so validation reports the error to the model instead of crashing.
+2. `finish.usage.inputTokens` must be the real number from the provider — the loop uses it as `measured` to re-anchor the token estimate.
+3. Network errors/429/5xx → `error { retryable: true }`; 401/403/400 → `retryable: false`. Context too long → a message containing "context" or "too long" so the loop recognizes it and compacts.
+4. Respect `signal`: abort the fetch, stop yielding.
 
-## Vì sao không dùng Vercel AI SDK
+## Why not the Vercel AI SDK
 
-opencode V2 đã bỏ Vercel AI SDK để tự viết `packages/ai`; openclaw cũng tự viết `StreamFn`. Lý do chung: kiểm soát cache control, tool-call repair, và tránh phụ thuộc nặng cho một interface 2 hàm. Ta làm tương tự; nếu sau này cần provider đã có trong AI SDK, một custom module bọc nó là đủ.
+opencode V2 dropped the Vercel AI SDK and wrote its own `packages/ai`; openclaw also wrote its own `StreamFn`. Shared reasons: control over cache control, tool-call repair, and avoiding a heavy dependency for a 2-function interface. We do the same; if a provider that already exists in the AI SDK is needed later, a custom module wrapping it is enough.
 
-## Sau
+## Later
 
-- Extended thinking cho Anthropic (cần gửi lại block thinking kèm chữ ký).
-- Per-provider `requestOverrides` (temperature, reasoning effort) — để sau khi có nhu cầu thật.
+- Extended thinking for Anthropic (requires sending thinking blocks back with their signatures).
+- Per-provider `requestOverrides` (temperature, reasoning effort) — deferred until there is a real need.

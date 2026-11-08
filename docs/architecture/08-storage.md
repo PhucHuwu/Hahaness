@@ -1,69 +1,69 @@
-# 08 — Storage: một file SQLite
+# 08 — Storage: a single SQLite file
 
-## Vì sao
+## Why
 
-Người dùng là CEO no-code: họ **không tự làm gì**, chỉ ra lệnh cho CTO. Workspace dạng thư mục (COMPANY.md, `staff/`, `skills/`, `.hahaness/*.jsonl`, `hahaness.json`) buộc họ biết file nằm đâu, và đồng bộ/backup thì rời rạc. Từ bản này **toàn bộ công ty là một file** `.db`:
+The user is a no-code CEO: they **do nothing themselves**, they only give orders to the CTO. A directory-based workspace (COMPANY.md, `staff/`, `skills/`, `.hahaness/*.jsonl`, `hahaness.json`) forces them to know where files live, and sync/backup is fragmented. From this version on **the whole company is one file** `.db`:
 
-- Mặc định `<cwd>/.hahaness/hahaness.db`; đổi bằng env `HAHANESS_DB` hoặc option `dbPath` (`:memory:` cho test).
-- Backup/di chuyển = copy một file. Không có thư mục nào CEO cần mở.
-- CTO quản lý mọi thứ bằng tool (xem dưới); UI chủ yếu để **xem**, vẫn sửa được khi cần.
+- Default `<cwd>/.hahaness/hahaness.db`; change with env `HAHANESS_DB` or option `dbPath` (`:memory:` for tests).
+- Backup/move = copy one file. There is no directory the CEO needs to open.
+- The CTO manages everything through tools (see below); the UI is mainly for **viewing**, but can still edit when needed.
 
 ## Engine
 
-`node:sqlite` (`DatabaseSync`, có sẵn trong Node 22) — không thêm dependency.
+`node:sqlite` (`DatabaseSync`, built into Node 22) — no added dependency.
 
-- Node 22 in `ExperimentalWarning` khi load; `src/core/db.ts` lọc **đúng warning đó** trong lúc `createRequire("node:sqlite")`, rồi trả lại `process.emitWarning` gốc.
-- API đồng bộ: hợp với workload nhỏ (một công ty, vài nghìn tài liệu). `SessionStore`/`SkillStore` giữ chữ ký `async` để không đổi caller.
-- Bản build hiện tại **không có FTS5** → `DocumentStore.search` lọc trong JS bằng `toLocaleLowerCase` (đúng với tiếng Việt; `LIKE`/`lower()` của SQLite chỉ xử lý ASCII).
-- Version schema bằng `PRAGMA user_version`. Mọi bảng `CREATE … IF NOT EXISTS`, nên nâng version chỉ cần chạy lại `SCHEMA` (v1 → v2 thêm `schedules`, `schedule_runs`).
+- Node 22 prints an `ExperimentalWarning` on load; `src/core/db.ts` filters **exactly that warning** during `createRequire("node:sqlite")`, then restores the original `process.emitWarning`.
+- Synchronous API: fits a small workload (one company, a few thousand documents). `SessionStore`/`SkillStore` keep `async` signatures so callers do not change.
+- The current build has **no FTS5** → `DocumentStore.search` filters in JS with `toLocaleLowerCase` (correct for Vietnamese; SQLite's `LIKE`/`lower()` only handle ASCII).
+- Schema version via `PRAGMA user_version`. Every table is `CREATE … IF NOT EXISTS`, so bumping the version only requires re-running `SCHEMA` (v1 → v2 added `schedules`, `schedule_runs`).
 
 ## Schema (v1)
 
-| Bảng | Cột chính | Thay cho |
+| Table | Main columns | Replaces |
 |---|---|---|
-| `sessions` | id, parent_id, agent, model, title, created_at | dòng đầu `.jsonl` |
-| `events` | seq (autoinc), session_id, kind, data (JSON `StoreEvent`) | `.hahaness/sessions/<id>.jsonl` — vẫn append-only, đọc lại bằng `fold` |
+| `sessions` | id, parent_id, agent, model, title, created_at | first line of the `.jsonl` |
+| `events` | seq (autoinc), session_id, kind, data (JSON `StoreEvent`) | `.hahaness/sessions/<id>.jsonl` — still append-only, read back with `fold` |
 | `documents` | path (PK), content, created_at, updated_at, author | COMPANY/USER/MEMORY.md, `knowledge/`, `drafts/`, `deliverables/`, `.hahaness/tool-output/` |
 | `staff` | id, markdown, fired, updated_at | `staff/<id>.md` |
 | `skills` | id, content (markdown + frontmatter), updated_at | `skills/<id>/SKILL.md` |
 | `settings` | key, value (JSON) | `hahaness.json` (key `config`) |
 | `mcp_servers` | id, config (JSON) | `.hahaness/mcp.json` |
-| `schedules` | id, data (JSON `Schedule`), created_at | — (v2, xem `09-schedules.md`) |
+| `schedules` | id, data (JSON `Schedule`), created_at | — (v2, see `09-schedules.md`) |
 | `schedule_runs` | id, schedule_id, started_at, data (JSON `ScheduleRun`) | — (v2) |
 
-### Documents giữ dạng path
+### Documents keep path form
 
-Tài liệu khóa bằng path ảo (`knowledge/pricing.md`, `drafts/post.md`). Lý do: permission theo prefix (`write drafts/*` cho nhân viên) và thói quen của model (`read`, `list`, `write`) không đổi. `normalizePath` đổi `\` → `/`, bỏ `.`, **từ chối `..`**. `tool-output/` bị ẩn khỏi `list` gốc nhưng `read` được (footer của output bị cắt trỏ tới nó). `author` ghi ai sửa cuối (`ceo` từ UI, id vai từ tool).
+Documents are keyed by virtual path (`knowledge/pricing.md`, `drafts/post.md`). Reason: prefix-based permissions (`write drafts/*` for employees) and the model's habits (`read`, `list`, `write`) stay the same. `normalizePath` converts `\` → `/`, drops `.`, **rejects `..`**. `tool-output/` is hidden from the root `list` but can be `read` (the footer of truncated output points to it). `author` records who edited last (`ceo` from the UI, role id from tools).
 
 ### Staff overlay
 
-Vai builtin vẫn là file trong `src/agent/builtin/*.md` (là code, không phải dữ liệu). `AgentRegistry.useDb(db)` phủ lên: dòng `staff` đè vai cùng id, `fired = 1` xóa vai. Vai `primary` (CTO) không bao giờ bị đè/đuổi.
+Builtin roles are still files in `src/agent/builtin/*.md` (they are code, not data). `AgentRegistry.useDb(db)` overlays them: a `staff` row overrides the role with the same id, `fired = 1` removes the role. The `primary` role (CTO) is never overridden/dismissed.
 
 ### Config
 
-`settings.config` là nguồn cấu hình duy nhất; không đọc file cấu hình nào. API key không bao giờ trả ra UI (`••••`; gửi lại `••••` = giữ key cũ).
+`settings.config` is the only configuration source; no config file is read. API keys are never returned to the UI (`••••`; sending `••••` back = keep the old key).
 
-## Không còn bố cục file
+## No more file layout
 
-Bản đầu lưu workspace thành file (cột "Thay cho" ở trên). Bước nhập một lần (`importLegacy`) và file `hahaness.json` đã bỏ: DB là nguồn sự thật duy nhất. DB mới → `workspace.ensure()` tạo mẫu COMPANY/USER/MEMORY trong bảng `documents`.
+The first version stored the workspace as files (the "Replaces" column above). The one-time import step (`importLegacy`) and the `hahaness.json` file were dropped: the DB is the single source of truth. New DB → `workspace.ensure()` creates COMPANY/USER/MEMORY templates in the `documents` table.
 
-## CTO quản lý công ty bằng tool
+## The CTO manages the company through tools
 
-| Tool | Action | Tác dụng |
+| Tool | Action | Effect |
 |---|---|---|
-| `knowledge` | outline, save, append, move, delete, company, ceo | các bộ tri thức dạng cây `knowledge/*` (`10-knowledge-tree.md`), COMPANY.md, USER.md |
-| `manage_skill` | list, show, save, delete | kỹ năng (description = khi nào dùng; instructions = quy trình) |
-| `staff` | show, edit, fire | sửa job description/capabilities, cho nghỉ; không sửa/đuổi CTO |
-| `mcp_manage` | list, add, enable, disable, reconnect, remove | kết nối công cụ ngoài; **`add` là `ask`** trong ruleset CTO → CEO duyệt trên UI (stdio chạy lệnh trên máy) |
-| `memory` | list, add, replace, remove | sự thật ngắn (≤ 4k ký tự) |
-| `schedule` | list, create, update, enable, disable, remove, run_now, history | việc định kỳ (`09-schedules.md`) |
-| `hire` | — | tuyển vai mới |
-| `search` | — | tìm trong tài liệu (mọi vai có `read`) |
+| `knowledge` | outline, save, append, move, delete, company, ceo | tree-shaped knowledge sets `knowledge/*` (`10-knowledge-tree.md`), COMPANY.md, USER.md |
+| `manage_skill` | list, show, save, delete | skills (description = when to use; instructions = procedure) |
+| `staff` | show, edit, fire | edit job description/capabilities, dismiss; cannot edit/dismiss the CTO |
+| `mcp_manage` | list, add, enable, disable, reconnect, remove | connect external tools; **`add` is `ask`** in the CTO ruleset → the CEO approves in the UI (stdio runs commands on the machine) |
+| `memory` | list, add, replace, remove | short facts (≤ 4k characters) |
+| `schedule` | list, create, update, enable, disable, remove, run_now, history | recurring jobs (`09-schedules.md`) |
+| `hire` | — | hire a new role |
+| `search` | — | search documents (every role that has `read`) |
 
-`MANAGEMENT_ACTIONS` (delegate, hire, memory, question, knowledge, manage_skill, staff, mcp_manage, schedule) luôn bị deny cho nhân viên: `Harness.spawn` deny tất cả trừ `delegate` (deny thêm cho vai leaf), và `capabilityRules` của vai được tuyển cũng deny. Test: "employees never get management tools".
+`MANAGEMENT_ACTIONS` (delegate, hire, memory, question, knowledge, manage_skill, staff, mcp_manage, schedule) are always denied to employees: `Harness.spawn` denies all of them except `delegate` (also denied for leaf roles), and the `capabilityRules` of hired roles deny them as well. Test: "employees never get management tools".
 
-Thay đổi có hiệu lực ở **phiên mới** (system prompt đóng băng per-session, xem `03`); tool trả câu nhắc này cho model.
+Changes take effect in **new sessions** (the system prompt is frozen per session, see `03`); the tool returns this reminder to the model.
 
-## Kết quả cho CEO
+## Results for the CEO
 
-`deliverables/*` (CTO nộp) và `drafts/*` (nhân viên) hiển thị ở trang **Kết quả**: xem, chép, tải `.md` (`/api/results/download`, `content-disposition` có `filename*` UTF-8), xóa. `.docx`/`.pdf` để sau (roadmap).
+`deliverables/*` (submitted by the CTO) and `drafts/*` (employees) are shown on the **Results** (Kết quả) page: view, copy, download `.md` (`/api/results/download`, `content-disposition` with UTF-8 `filename*`), delete. `.docx`/`.pdf` later (roadmap).

@@ -1,16 +1,16 @@
-# 04 — Multi-agent: CEO / CTO / nhân viên
+# 04 — Multi-agent: CEO / CTO / employees
 
-## Định nghĩa một vai
+## Defining a role
 
-`src/agent/builtin/<id>.md` (có sẵn, là code) hoặc một dòng trong bảng `staff` của DB (CTO tuyển/sửa bằng tool, hoặc CEO sửa trên UI). Cả hai cùng một dạng markdown:
+`src/agent/builtin/<id>.md` (built in, part of the code) or a row in the DB's `staff` table (hired/edited by the CTO via tools, or edited by the CEO in the UI). Both use the same markdown format:
 
 ```md
 ---
 id: writer
 name: Writer
-description: Writes long-form content in the company's voice.   # CTO đọc dòng này khi chọn người
+description: Writes long-form content in the company's voice.   # the CTO reads this line when choosing who to assign
 mode: subagent            # primary | subagent | all
-model: [openai/gpt-4.1]   # tùy chọn, list = fallback
+model: [openai/gpt-4.1]   # optional, list = fallback
 steps: 30
 context: isolated         # isolated | fork
 permissions:
@@ -18,36 +18,36 @@ permissions:
   - { action: write, resource: "drafts/*", effect: allow }
   - { action: webfetch, resource: "*",     effect: allow }
 ---
-Bạn là … (job description = system prompt)
+You are … (job description = system prompt)
 ```
 
-Merge: builtin → bảng `staff` (`AgentRegistry.useDb`). Cùng id thì dòng DB thắng; `fired = 1` xóa vai. Vai `primary` (CTO) không bị đè/đuổi. Xem `08-storage.md`.
+Merge: builtin → `staff` table (`AgentRegistry.useDb`). Same id → the DB row wins; `fired = 1` removes the role. The `primary` role (CTO) cannot be overridden or fired. See `08-storage.md`.
 
-## Vai có sẵn
+## Built-in roles
 
-| id | mode | context | Làm gì | Tool |
+| id | mode | context | What it does | Tools |
 |---|---|---|---|---|
-| `cto` | primary | — | Nói chuyện với CEO; lập kế hoạch, tuyển, giao việc, duyệt, lưu deliverable, ghi memory; quản lý tri thức, kỹ năng, nhân viên, MCP, việc định kỳ | `delegate`, `hire`, `memory`, `todo`, `question`, `read`, `list`, `search`, `write`, `webfetch`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`, `schedule` |
-| `researcher` | subagent | isolated | Sự thật, đối thủ, số liệu, nguồn | `read`, `webfetch`, `websearch` |
-| `writer` | subagent | isolated | Bài viết, email, script | `read`, `write(drafts/*)`, `webfetch` |
-| `marketer` | subagent | isolated | Chiến dịch, định vị, copy | `read`, `write(drafts/*)`, `webfetch` |
-| `analyst` | subagent | fork | Phản biện deliverable theo ý CEO thật sự | `read` |
+| `cto` | primary | — | Talks to the CEO; plans, hires, assigns, reviews, saves deliverables, writes memory; manages knowledge, skills, employees, MCP, recurring jobs | `delegate`, `hire`, `memory`, `todo`, `question`, `read`, `list`, `search`, `write`, `webfetch`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`, `schedule` |
+| `researcher` | subagent | isolated | Facts, competitors, figures, sources | `read`, `webfetch`, `websearch` |
+| `writer` | subagent | isolated | Articles, emails, scripts | `read`, `write(drafts/*)`, `webfetch` |
+| `marketer` | subagent | isolated | Campaigns, positioning, copy | `read`, `write(drafts/*)`, `webfetch` |
+| `analyst` | subagent | fork | Critiques deliverables against what the CEO actually wants | `read` |
 
-## Tuyển nhân viên: tool `hire`
+## Hiring: the `hire` tool
 
-CTO gọi khi không ai hợp việc. Đây là **việc bình thường**, system prompt CTO nói rõ.
+The CTO calls it when nobody fits the task. This is **normal**, and the CTO system prompt says so explicitly.
 
 ```ts
 hire({ id, name, description, system, capabilities: ("read"|"write"|"webfetch"|"websearch")[] })
 ```
 
-- Harness dịch `capabilities` thành ruleset cố định. CTO **không** tự viết permission — tránh việc model cấp quyền quá tay.
-- Luôn cứng: `write` chỉ `drafts/*`; mọi `MANAGEMENT_ACTIONS` (delegate, hire, memory, question, knowledge, manage_skill, staff, mcp_manage, schedule) = deny.
-- Ghi vào bảng `staff` ngay → tồn tại qua các phiên. Sau này CTO sửa job description/capabilities hoặc cho nghỉ bằng tool `staff` (`show`/`edit`/`fire`); CEO cũng sửa được trên UI.
-- Không được ghi đè vai `primary`. Trùng id → báo lỗi cho model, gợi ý dùng `delegate`.
-- `id` được slug hóa.
+- The harness translates `capabilities` into a fixed ruleset. The CTO does **not** write permissions itself — this prevents the model from over-granting rights.
+- Always hard-coded: `write` only `drafts/*`; every `MANAGEMENT_ACTIONS` entry (delegate, hire, memory, question, knowledge, manage_skill, staff, mcp_manage, schedule) = deny.
+- Written to the `staff` table immediately → persists across sessions. Later the CTO edits the job description/capabilities or dismisses the employee with the `staff` tool (`show`/`edit`/`fire`); the CEO can also edit in the UI.
+- Cannot overwrite the `primary` role. Duplicate id → error to the model, suggesting `delegate`.
+- `id` is slugified.
 
-## Giao việc: tool `delegate`
+## Assigning work: the `delegate` tool
 
 ```ts
 delegate({
@@ -57,95 +57,95 @@ delegate({
 })
 ```
 
-- `list` trả staff hiện có và việc từng người đang làm (rảnh / đang làm "…" / chờ trả lời, số việc xếp hàng). CTO được dặn gọi trước khi chọn người.
-- `steer`/`stop` theo `agent` (id nhân viên). `sessionID` vẫn nhận được (từ báo cáo hoặc phiên cũ), harness quy về phiên hiện tại của nhân viên đó.
-- `spawn` với agent không tồn tại → lỗi gợi ý `list`/`hire` (không throw).
-- Description tool không liệt kê staff cứng (vì staff thay đổi khi `hire` → vỡ cache); thay bằng `list`.
+- `list` returns the current staff and what each one is doing (idle / working on "…" / waiting for an answer, number of queued tasks). The CTO is instructed to call it before choosing someone.
+- `steer`/`stop` target an `agent` (employee id). `sessionID` is still accepted (from a report or an old session); the harness maps it to that employee's current session.
+- `spawn` with a nonexistent agent → error suggesting `list`/`hire` (no throw).
+- The tool description does not hard-code the staff list (staff changes on `hire` → breaks the cache); `list` is used instead.
 
 ### Lifecycle
 
 ```
-spawn ─▶ sessionFor(agent)   phiên DUY NHẤT của nhân viên (xem 11-one-session-per-agent.md)
-      ─▶ nhân viên đang làm việc khác? → xếp hàng (tasks[]), làm lần lượt
-      ─▶ inbox(nhân viên).push(queue, "New task from <ai>…" + [fork context] + <brief>)
-      ─▶ runTurn   giới hạn maxConcurrentSubagents = 4 việc chưa có báo cáo (đang làm + xếp hàng)
-      ├─ foreground: CTO chờ, nhận ResultEntry trong tool result
-      └─ background: trả "đang làm"/"xếp hàng" ngay; xong → inbox(CTO).push(queue, <subagent …/>) → wake CTO nếu idle
+spawn ─▶ sessionFor(agent)   the employee's ONLY session (see 11-one-session-per-agent.md)
+      ─▶ employee busy with another task? → queue (tasks[]), handled in order
+      ─▶ inbox(employee).push(queue, "New task from <ai>…" + [fork context] + <brief>)
+      ─▶ runTurn   limit maxConcurrentSubagents = 4 tasks without a report (running + queued)
+      ├─ foreground: CTO waits, receives ResultEntry in the tool result
+      └─ background: returns "working"/"queued" immediately; when done → inbox(CTO).push(queue, <subagent …/>) → wake CTO if idle
 ```
 
-### ResultEntry — thứ duy nhất qua biên
+### ResultEntry — the only thing that crosses the boundary
 
 ```ts
 { sessionID, agent, status: "completed"|"failed"|"stopped"|"needs_input", exitReason, summary (≤8k), filesTouched, failedWrites?, usage }
 ```
 
-Render cho CTO:
+Rendered for the CTO:
 
 ```xml
 <subagent sessionID="ses_x" agent="writer" status="completed" steps="6">
-…báo cáo cuối của nhân viên…
+…the employee's final report…
 files saved: drafts/welcome-email.md
 WRITE FAILED (these documents were NOT saved, whatever the summary says): deliverables/x.md — Error: Permission rejected: denied by policy
 </subagent>
 ```
 
-- `filesTouched` lấy từ cặp tool-call/tool-result của `write`, và chỉ tính các lần ghi **thành công**. Path ghi lỗi, không được ghi lại thành công sau đó, nằm trong `failedWrites`. Lý do: model nhân viên vẫn có thể viết "đã lưu" dù mọi lần `write` bị từ chối, và CTO đã chuyển nguyên lời đó cho CEO.
-- `summary`, `filesTouched`, `steps` chỉ tính phần phiên **từ brief của việc này trở đi**, vì phiên nhân viên chứa nhiều việc.
-- Nơi lưu: nhân viên chỉ ghi được `drafts/*`. Brief mở đầu bằng một câu nhắc chỗ lưu (`saveHint`, tính từ ruleset của nhân viên). CTO duyệt xong thì đưa bản cuối vào `deliverables/`. `cto.md` yêu cầu CTO chỉ nói một tài liệu tồn tại khi `write` hoặc `read` đã xác nhận.
+- `filesTouched` comes from `write` tool-call/tool-result pairs and counts only **successful** writes. Paths whose write failed and were not later written successfully go into `failedWrites`. Reason: the employee model can still write "saved" even when every `write` was rejected, and the CTO used to pass that claim straight to the CEO.
+- `summary`, `filesTouched`, `steps` only cover the part of the session **from this task's brief onward**, because an employee session contains many tasks.
+- Where to save: employees can only write `drafts/*`. The brief starts with a sentence stating where to save (`saveHint`, computed from the employee's ruleset). After review the CTO puts the final version into `deliverables/`. `cto.md` requires the CTO to only say a document exists once `write` or `read` has confirmed it.
 
-### Nhân viên hỏi ngược: tool `ask_lead` → `status: "needs_input"`
+### Employee asks back: tool `ask_lead` → `status: "needs_input"`
 
-Nhân viên thiếu thông tin hoặc gặp quyết định không phải của mình thì gọi `ask_lead({ question, options?, progress? })`.
+An employee that lacks information or faces a decision that is not theirs calls `ask_lead({ question, options?, progress? })`.
 
-- Tool **không chờ câu trả lời trong tool call**. Người giao việc có thể đang chờ chính nhân viên đó (`delegate` foreground), nên chờ sẽ deadlock. Thay vào đó tool trả `metadata.endTurn`, và loop kết thúc lượt ngay sau batch tool hiện tại mà không gọi model thêm.
-- `Harness.result` thấy lượt cuối kết thúc bằng `ask_lead` thành công → `ResultEntry.status = "needs_input"`, `summary` là câu hỏi, lựa chọn và tiến độ. Kết quả này về CTO như mọi báo cáo khác: tool result nếu foreground, message `source: "subagent"` nếu background. Bản render có thêm câu nhắc trả lời bằng `delegate steer`.
-- CTO trả lời bằng `delegate(steer, agent, message)`. Nếu chỉ CEO quyết được, CTO hỏi CEO bằng `question` trước. `steer` tự nạp lại phiên nhân viên nếu server đã restart.
-- Việc đang làm (`Live.task`) giữ `{ lead, from, wakeLead, waiting, reported }`. Việc chưa đóng khi `needs_input`; lượt sau câu trả lời kết thúc thì `settle` gửi `ResultEntry` mới vào inbox người giao và đánh thức theo `wakeLead`. Nhân viên có thể hỏi tiếp, khi đó lại là `needs_input`. Việc kế tiếp trong hàng chỉ bắt đầu khi việc này đóng.
-- Restart khi nhân viên đang chờ trả lời: `resume` dựng lại việc từ brief cuối (`source: agent`) để câu trả lời vẫn được báo lại.
-- `ask_lead` chỉ hiện khi có việc được giao đang mở; `question` ẩn trong lúc đó (hỏi người giao, không hỏi CEO). Lọc trong `toolsFor` mỗi lượt, không bằng rule deny, vì ruleset cố định cả phiên mà phiên dùng chung cho chat với CEO lẫn việc được giao.
-- Comms hiện báo cáo này với nhãn "hỏi lại".
+- The tool **does not wait for the answer inside the tool call**. The assigner may be waiting on that same employee (foreground `delegate`), so waiting would deadlock. Instead the tool returns `metadata.endTurn`, and the loop ends the turn right after the current tool batch without calling the model again.
+- `Harness.result` sees that the last turn ended with a successful `ask_lead` → `ResultEntry.status = "needs_input"`, `summary` holds the question, options and progress. This result reaches the CTO like any other report: a tool result if foreground, a `source: "subagent"` message if background. The rendering adds a reminder to answer with `delegate steer`.
+- The CTO answers with `delegate(steer, agent, message)`. If only the CEO can decide, the CTO asks the CEO with `question` first. `steer` reloads the employee session automatically if the server has restarted.
+- The current task (`Live.task`) holds `{ lead, from, wakeLead, waiting, reported }`. The task stays open on `needs_input`; when the turn after the answer ends, `settle` sends a new `ResultEntry` to the assigner's inbox and wakes them according to `wakeLead`. The employee can ask again, which is another `needs_input`. The next queued task starts only when this one closes.
+- Restart while the employee is waiting for an answer: `resume` rebuilds the task from the last brief (`source: agent`) so the answer is still reported back.
+- `ask_lead` is only shown while an assigned task is open; `question` is hidden during that time (ask the assigner, not the CEO). Filtered in `toolsFor` each turn, not by a deny rule, because the ruleset is fixed for the whole session and the session is shared between chat with the CEO and assigned work.
+- Comms shows this report with the label **asking back** (hỏi lại).
 
-### Isolation của nhân viên
+### Employee isolation
 
-- Hard deny (không config được): mọi `MANAGEMENT_ACTIONS` trừ `question` và `delegate` — gồm `memory`, `hire`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`, `schedule`; thêm `delegate` nếu `role: leaf`. Orchestrator chỉ `delegate` được khi đang làm việc được giao (`spawn` kiểm tra), tối đa `maxDepth`. Test: "employees never get management tools".
-- System context: Tier A của chính họ + `COMPANY.md`; **không** có `USER.md`/`MEMORY.md` (không cần biết sếp thích gì, và giảm rò rỉ).
-- `context: fork` (analyst): thêm summary compaction gần nhất của CTO + 20 message gần nhất, cap 30k token.
-- `employeeRules` trong `Harness.activate` áp cho phiên của mọi agent không phải `primary`, kể cả sau restart. `question` không bị deny vì CEO chat thẳng trong cùng phiên; `toolsFor` ẩn nó khi đang làm việc được giao.
+- Hard deny (not configurable): every `MANAGEMENT_ACTIONS` entry except `question` and `delegate` — i.e. `memory`, `hire`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`, `schedule`; plus `delegate` if `role: leaf`. An orchestrator can only `delegate` while working on an assigned task (`spawn` checks), up to `maxDepth`. Test: "employees never get management tools".
+- System context: their own Tier A + `COMPANY.md`; **no** `USER.md`/`MEMORY.md` (they do not need to know the boss's preferences, and it reduces leakage).
+- `context: fork` (analyst): adds the CTO's latest compaction summary + the 20 latest messages, cap 30k tokens.
+- `employeeRules` in `Harness.activate` apply to the session of every non-`primary` agent, including after restart. `question` is not denied because the CEO chats directly in the same session; `toolsFor` hides it while an assigned task is in progress.
 
-### Ai nói gì: `Message.source` + `from`
+### Who said what: `Message.source` + `from`
 
-| source | from | khi nào |
+| source | from | when |
 |---|---|---|
-| `user` | `ceo` | CEO gõ |
-| `agent` | id agent / `ceo` | brief khi spawn (`from` = người giao, hoặc `ceo` ở direct mode); `delegate steer` (`from` = CTO) |
-| `subagent` | id nhân viên | báo cáo nền đổ vào inbox phiên người giao |
+| `user` | `ceo` | the CEO types |
+| `agent` | agent id / `ceo` | brief on spawn (`from` = the assigner, or `ceo` in direct mode); `delegate steer` (`from` = CTO) |
+| `subagent` | employee id | background report delivered to the assigner's session inbox |
 | `system` | — | harness (compaction, max steps) |
-| `agent` | `scheduler` | ghi chú `[Scheduled job]` và brief của việc định kỳ (`09-schedules.md`) |
+| `agent` | `scheduler` | `[Scheduled job]` note and the recurring job's brief (`09-schedules.md`) |
 
-Trước đây steer đánh `source: user`, nên không phân biệt được với CEO. Brief cũ (`source: system`, bắt đầu bằng "You are a subagent") vẫn được UI/timeline nhận ra. `from` chỉ là metadata cho UI; model không thấy.
+Steer used to be tagged `source: user`, so it could not be distinguished from the CEO. Old briefs (`source: system`, starting with "You are a subagent") are still recognized by the UI/timeline. `from` is only UI metadata; the model does not see it.
 
-## Cách CTO làm việc (system prompt)
+## How the CTO works (system prompt)
 
-1. Mơ hồ thật sự → hỏi **một** câu kèm lựa chọn. Không thì tự quyết và nói rõ.
-2. `delegate(list)` → không ai hợp → `hire` → `delegate(spawn)`.
-3. Việc độc lập chạy `background: true` song song.
-4. Nhận bài → đối chiếu với brief → chưa đạt thì `steer` với feedback cụ thể, không đẩy bài yếu lên CEO.
-5. Xong → `write deliverables/<name>.md` → báo tên tài liệu; CEO xem/tải ở trang **Kết quả**.
-6. Ghi `memory` sự thật lâu dài về công ty/CEO; tài liệu CEO đưa → `knowledge`; cách làm lặp lại → `manage_skill`.
-7. Báo cáo kiểu executive: kết quả, quyết định đã làm, cần gì từ CEO. Không transcript.
+1. Genuinely ambiguous → ask **one** question with options. Otherwise decide and say so.
+2. `delegate(list)` → nobody fits → `hire` → `delegate(spawn)`.
+3. Independent tasks run with `background: true` in parallel.
+4. Receive work → check it against the brief → not good enough → `steer` with specific feedback; do not pass weak work up to the CEO.
+5. Done → `write deliverables/<name>.md` → report the document name; the CEO views/downloads it on the **Results** (Kết quả) page.
+6. Write long-lived facts about the company/CEO to `memory`; documents the CEO provides → `knowledge`; repeated procedures → `manage_skill`.
+7. Executive-style reports: results, decisions made, what is needed from the CEO. No transcripts.
 
 ## CEO
 
-- Mặc định gõ tự nhiên với CTO.
-- `@writer <task>` trong phiên CTO → brief tối thiểu, spawn nền (`wakeLead: false`), vào phiên của writer.
-- Chat riêng: bấm tên nhân viên trong sidebar → `POST /api/sessions { agent }` trả **phiên duy nhất** của nhân viên đó (tạo nếu chưa có). CEO và CTO cùng nói chuyện với nhân viên trong phiên đó; nhân viên không giao việc/tuyển người.
-- Sidebar Chat mỗi người một dòng, kèm trạng thái (rảnh / đang làm "…" / chờ trả lời / số việc chờ).
+- By default types naturally to the CTO.
+- `@writer <task>` in the CTO session → minimal brief, background spawn (`wakeLead: false`), goes into the writer's session.
+- Private chat: click an employee's name in the sidebar → `POST /api/sessions { agent }` returns that employee's **only session** (created if missing). The CEO and the CTO both talk to the employee in that session; the employee does not assign work or hire.
+- The Chat sidebar has one row per person, with status (idle / working on "…" / waiting for an answer / number of pending tasks).
 
-## Giới hạn
+## Limits
 
-| | mặc định |
+| | default |
 |---|---|
 | `delegate.maxDepth` | 1 |
-| `delegate.maxConcurrent` | 4 việc chưa có báo cáo (toàn công ty) |
-| nhân viên `steps` | 30 (hire) / theo file |
-| `summaryCap` | 8.000 chars |
+| `delegate.maxConcurrent` | 4 tasks without a report (company-wide) |
+| employee `steps` | 30 (hire) / per file |
+| `summaryCap` | 8,000 chars |

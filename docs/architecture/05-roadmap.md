@@ -1,64 +1,64 @@
 # 05 — Roadmap
 
-## v0.1 — Skeleton (hiện tại)
+## v0.1 — Skeleton (current)
 
-- [x] Loop: runTurn/runStep, stream, tool song song, Outcome, doom-loop guard cơ bản
-- [x] Inbox queue/steer; event store (JSONL, nay là SQLite); claim/release
+- [x] Loop: runTurn/runStep, stream, parallel tools, Outcome, basic doom-loop guard
+- [x] Inbox queue/steer; event store (JSONL, now SQLite); claim/release
 - [x] Tool.define + registry + truncate; permission ruleset + ask gate
-- [x] Provider registry `provider/model`, OpenAI-compatible, custom module, config (nay trong DB)
-- [x] Context: system tiers, workspace COMPANY/USER/MEMORY, budget, compaction cơ bản
-- [x] Vai: cto, researcher, writer, marketer, analyst; `hire` runtime → `staff/*.md`
+- [x] Provider registry `provider/model`, OpenAI-compatible, custom module, config (now in the DB)
+- [x] Context: system tiers, workspace COMPANY/USER/MEMORY, budget, basic compaction
+- [x] Roles: cto, researcher, writer, marketer, analyst; runtime `hire` → `staff/*.md`
 - [x] `delegate` fg/bg, ResultEntry, fork context; `memory`; `websearch`/`webfetch`
-- [x] `@employee` giao việc thẳng (CLI readline ban đầu đã bỏ: hệ thống chỉ có bản web)
+- [x] `@employee` assigns work directly (the initial readline CLI was dropped: the system is web-only)
 
-## v0.2 — CEO dùng được hằng ngày (hiện tại)
+## v0.2 — Usable by the CEO every day (current)
 
-- [x] Giao diện web (React + Vite) + server `node:http` + SSE — xem `07-ui-server.md`
-- [x] Resume phiên trước từ store (`Harness.resume`, `GET /api/sessions`)
-- [x] Skills: `skills/<id>/SKILL.md`, index Tier A, tool `skill`, CRUD trong UI
-- [x] Knowledge: `knowledge/` index Tier B, editor COMPANY/USER/MEMORY, xem deliverables
-- [x] Quản lý nhân viên từ UI: tuyển / sửa markdown / cho nghỉ (không đụng CTO)
-- [x] MCP client stdio + streamable HTTP, `.hahaness/mcp.json`, bật/tắt từ UI
-- [x] Settings: providers/model trong DB (`settings.config`), gọi thử, reconfigure không restart
-- [x] `question` + permission ask trả lời trong chat
-- [x] Lưu trữ một file SQLite (`node:sqlite`): phiên, tài liệu, nhân viên, kỹ năng, config, MCP; nhập bố cục thư mục cũ một lần — xem `08-storage.md`
-- [x] CTO tự quản lý công ty bằng tool: `knowledge`, `manage_skill`, `staff`, `mcp_manage` (add cần CEO duyệt); tool `search`
-- [x] Trang Kết quả: xem/chép/tải `.md` deliverables + drafts
-- [ ] Tải kết quả dạng `.docx` / `.pdf`
-- [x] Độ bền loop: vá tool-call mồ côi, báo model sau crash (không tự chạy tiếp), giữ ước lượng khi proxy không trả usage, `Retry-After`, stream đứt sau tool-call, dừng CTO dừng luôn nhân viên foreground — xem `01-agent-loop.md`
-- [x] Compaction đủ dùng: overflow recovery (shrink 0.85/0.7/0.5), request tóm tắt tự co cho vừa, retry khi thiếu heading + checkpoint dựng tay, `compaction.model`, memory flush, `[SKILL_PRUNED]`, re-anchor — xem `03-context-engineering.md`
-- [ ] Compaction: `/compact [focus]` thủ công, precompute nền, bỏ ảnh cũ
-- [x] Tài liệu đổi giữa phiên (COMPANY/USER/MEMORY/knowledge/skills) → `<workspace-update>` qua message, system giữ nguyên, không báo lại thay đổi của chính agent — xem `03-context-engineering.md`
-- [ ] Memory flush trước compaction; daily notes
-- [ ] Workspace file đổi giữa phiên → inject diff
-- [x] Provider Anthropic (`type: "anthropic"`, prompt cache, SSE) — xem `06-providers.md`
-- [x] Model dự phòng: `agent.model[]` + `fallbackModels` công ty, đổi khi hết retry / lỗi không retry được — xem `01-agent-loop.md`
-- [ ] `websearch` qua provider có key (Tavily/Brave) khi cấu hình
-- [x] Nhân viên hỏi ngược: tool `ask_lead` → `status: needs_input` → CTO trả lời bằng `delegate steer` (hoặc hỏi CEO trước) — xem `04-multi-agent.md`
-- [ ] Upload file nhị phân (PDF/DOCX) vào tri thức + trích text
-- [ ] Tìm kiếm FTS khi `node:sqlite` có FTS5 (hiện lọc trong JS)
+- [x] Web UI (React + Vite) + `node:http` server + SSE — see `07-ui-server.md`
+- [x] Resume previous session from the store (`Harness.resume`, `GET /api/sessions`)
+- [x] Skills: `skills/<id>/SKILL.md`, Tier A index, `skill` tool, CRUD in the UI
+- [x] Knowledge: `knowledge/` Tier B index, COMPANY/USER/MEMORY editor, deliverables viewer
+- [x] Manage employees from the UI: hire / edit markdown / dismiss (CTO untouched)
+- [x] MCP client stdio + streamable HTTP, `.hahaness/mcp.json`, enable/disable from the UI
+- [x] Settings: providers/model in the DB (`settings.config`), test call, reconfigure without restart
+- [x] `question` + permission ask answered in the chat
+- [x] Storage in a single SQLite file (`node:sqlite`): sessions, documents, employees, skills, config, MCP; one-time import of the old directory layout — see `08-storage.md`
+- [x] The CTO manages the company through tools: `knowledge`, `manage_skill`, `staff`, `mcp_manage` (add requires CEO approval); `search` tool
+- [x] **Results** (Kết quả) page: view/copy/download `.md` deliverables + drafts
+- [ ] Download results as `.docx` / `.pdf`
+- [x] Loop robustness: repair orphaned tool calls, notify the model after a crash (no automatic continuation), keep the estimate when the proxy returns no usage, `Retry-After`, stream cut after a tool call, stopping the CTO also stops foreground employees — see `01-agent-loop.md`
+- [x] Compaction good enough: overflow recovery (shrink 0.85/0.7/0.5), summary request shrinks itself to fit, retry when headings are missing + hand-built checkpoint, `compaction.model`, memory flush, `[SKILL_PRUNED]`, re-anchor — see `03-context-engineering.md`
+- [ ] Compaction: manual `/compact [focus]`, background precompute, drop old images
+- [x] Documents changed mid-session (COMPANY/USER/MEMORY/knowledge/skills) → `<workspace-update>` via message, system unchanged, the agent's own changes are not reported back to it — see `03-context-engineering.md`
+- [ ] Memory flush before compaction; daily notes
+- [ ] Workspace file changed mid-session → inject diff
+- [x] Anthropic provider (`type: "anthropic"`, prompt cache, SSE) — see `06-providers.md`
+- [x] Fallback models: `agent.model[]` + company `fallbackModels`, switch when retries are exhausted / on non-retryable errors — see `01-agent-loop.md`
+- [ ] `websearch` through a keyed provider (Tavily/Brave) when configured
+- [x] Employees ask back: `ask_lead` tool → `status: needs_input` → the CTO answers with `delegate steer` (or asks the CEO first) — see `04-multi-agent.md`
+- [ ] Upload binary files (PDF/DOCX) into knowledge + text extraction
+- [ ] FTS search when `node:sqlite` has FTS5 (currently filtered in JS)
 
-## v0.3 — Công ty "sống"
+## v0.3 — A "living" company
 
-- [ ] Auth token + bind ngoài localhost; đóng gói desktop (Tauri/Electron bọc `ui/dist` + server)
-- [x] Cron: việc định kỳ — tool `schedule` của CTO, phiên CTO mới mỗi lần chạy, chạy bù một lần, tool bắt buộc → `blocked`, trang Lịch — xem `09-schedules.md`
-- [ ] Heartbeat / chạy nền khi app đóng; timezone riêng mỗi lịch; trần chi phí mỗi lần chạy
-- [ ] Tool Facebook (đọc feed/nhóm) — qua MCP hoặc builtin; lịch "lướt Facebook" đang chờ tool này
-- [ ] Kênh chat (Telegram/Zalo/Slack) như openclaw gateway
-- [ ] MCP resources/prompts; OAuth cho server HTTP
+- [ ] Auth token + bind beyond localhost; desktop packaging (Tauri/Electron wrapping `ui/dist` + server)
+- [x] Cron: recurring jobs — the CTO's `schedule` tool, a new CTO session per run, one catch-up run, required tools → `blocked`, **Schedules** (Lịch) page — see `09-schedules.md`
+- [ ] Heartbeat / background running when the app is closed; per-schedule timezone; cost cap per run
+- [ ] Facebook tool (read feed/groups) — via MCP or builtin; the "browse Facebook" schedule is waiting on this tool
+- [ ] Chat channels (Telegram/Zalo/Slack) like the openclaw gateway
+- [ ] MCP resources/prompts; OAuth for HTTP servers
 - [ ] Precompute compaction; session_search
-- [ ] Tổ chức nhiều tầng: CTO → trưởng nhóm (orchestrator) → nhân viên
-- [ ] Chi phí/usage per nhân viên hiển thị trong UI
+- [ ] Multi-level organization: CTO → team lead (orchestrator) → employees
+- [ ] Per-employee cost/usage shown in the UI
 
-## Sau
+## Later
 
-- Code Mode `execute({code})` cho vai kỹ thuật nếu CEO muốn
-- Turn taint từ nội dung web không tin cậy
-- Chi phí/usage per nhân viên cho CEO xem
+- Code Mode `execute({code})` for technical roles if the CEO wants it
+- Turn taint from untrusted web content
+- Per-employee cost/usage for the CEO to see
 
-## Câu hỏi mở
+## Open questions
 
-1. `analyst` fork bao nhiêu context của CTO? (Chọn tạm: summary + 20 message, cap 30k.)
-2. Memory ghi giữa phiên: đóng băng tới phiên sau hay re-inject? (Chọn tạm: đóng băng; tool result đã cho model thấy.)
-3. CTO có được tự sửa job description của nhân viên cũ không? (Đã chốt: có, qua tool `staff` — CEO chỉ ra lệnh, không tự sửa. CTO được dặn chỉ sửa/cho nghỉ khi CEO yêu cầu hoặc vai rõ ràng kém, và báo lại một dòng.)
-4. Nhân viên có nên thấy `USER.md` khi viết nội dung nhân danh CEO (email ký tên CEO)? (Chọn tạm: không; CTO đưa thông tin cần thiết vào `brief.context`.)
+1. How much of the CTO's context does `analyst` fork? (Tentative: summary + 20 messages, cap 30k.)
+2. Memory written mid-session: frozen until the next session or re-injected? (Tentative: frozen; the tool result has already shown it to the model.)
+3. May the CTO edit the job description of an existing employee? (Decided: yes, via the `staff` tool — the CEO only gives orders and does not edit directly. The CTO is told to edit/dismiss only when the CEO asks or the role is clearly underperforming, and to report it in one line.)
+4. Should employees see `USER.md` when writing content on the CEO's behalf (emails signed by the CEO)? (Tentative: no; the CTO puts the needed information into `brief.context`.)

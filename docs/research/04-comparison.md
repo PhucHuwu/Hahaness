@@ -1,47 +1,47 @@
-# So sánh 3 harness
+# Comparison of the 3 harnesses
 
-| Tiêu chí | hermes-agent | opencode V2 | openclaw |
+| Criterion | hermes-agent | opencode V2 | openclaw |
 |---|---|---|---|
-| Ngôn ngữ / mô hình | Python, sync + thread | TS, Effect-TS, event-sourced | TS, async, pi-fork |
-| Loop stop condition | không còn tool_calls, hoặc hết budget | `needsContinuation` (có tool local) + `Outcome` enum | `stopReason` + `endTurn` + `batch.terminate` |
-| Step cap | 500 (sub 250), wrap-up notice 80% | `agent.steps`, step cuối `toolChoice:none` giữ tools | timeout 48h, idle timeout |
-| Doom-loop | `repetition_guard.py` | **không** (V2 bỏ) | `agent-loop-tool-recovery.ts` (tool error lặp) |
-| Steering giữa run | `/steer` chèn sau tool result | inbox `steer` promote giữa step | `steer/followup/collect/interrupt`, cap 20 |
-| Tool chạy song song | ThreadPool 8, reinsert thứ tự | fork fiber ngay khi tool-call event | chạy ngay khi stream, batch |
-| Persist trước execute | **có** (SQLite) | **có** (claim + event bus WAL) | SQLite + writer fence |
-| Tool schema | dict OpenAI | Effect/Zod/JSON Schema, normalize byte-stable | TypeBox + tool-call-repair |
-| Output lớn | spill disk + pointer | 2000 lines / 50 KiB, spill file 7 ngày | truncation + prune in-memory |
-| Permission | approval callback + dangerous cmd detect + YOLO | ruleset `action/resource/effect` last-match, `ask` default | profile × allow/deny/alsoAllow × elevated × sandbox |
-| MCP | `mcp_<server>_<tool>`, lazy, sanitize | `<server>_<tool>`, permission per-tool | bundle MCP + code mode |
-| Code Mode | `execute_code` (refund budget) | mặc định cho hầu hết tool qua `execute` | `code-mode-*.ts` |
-| System prompt | 3 tier theo volatility, **đóng băng** | `system.txt` + instruction sources shared-first, diff khi đổi | prefix stable + dynamic suffix, `promptMode` |
+| Language / model | Python, sync + threads | TS, Effect-TS, event-sourced | TS, async, pi fork |
+| Loop stop condition | no more tool_calls, or budget exhausted | `needsContinuation` (local tool present) + `Outcome` enum | `stopReason` + `endTurn` + `batch.terminate` |
+| Step cap | 500 (sub 250), wrap-up notice at 80% | `agent.steps`, last step `toolChoice:none` keeps tools | 48h timeout, idle timeout |
+| Doom-loop | `repetition_guard.py` | **none** (dropped in V2) | `agent-loop-tool-recovery.ts` (repeated tool errors) |
+| Mid-run steering | `/steer` inserted after tool result | inbox `steer` promoted between steps | `steer/followup/collect/interrupt`, cap 20 |
+| Parallel tool execution | ThreadPool 8, reinsert in order | fork fiber as soon as tool-call event arrives | run immediately during stream, batch |
+| Persist before execute | **yes** (SQLite) | **yes** (claim + event bus WAL) | SQLite + writer fence |
+| Tool schema | OpenAI dict | Effect/Zod/JSON Schema, normalized byte-stable | TypeBox + tool-call-repair |
+| Large output | spill to disk + pointer | 2000 lines / 50 KiB, spill file kept 7 days | truncation + in-memory prune |
+| Permission | approval callback + dangerous cmd detection + YOLO | ruleset `action/resource/effect` last-match, `ask` default | profile × allow/deny/alsoAllow × elevated × sandbox |
+| MCP | `mcp_<server>_<tool>`, lazy, sanitize | `<server>_<tool>`, per-tool permission | bundle MCP + code mode |
+| Code Mode | `execute_code` (budget refund) | default for most tools via `execute` | `code-mode-*.ts` |
+| System prompt | 3 tiers by volatility, **frozen** | `system.txt` + instruction sources shared-first, diff on change | stable prefix + dynamic suffix, `promptMode` |
 | Project rules | `.hermes.md` > `AGENTS.md` > `CLAUDE.md` | `AGENTS.md` + config `instructions` | workspace bootstrap files (cap 20k/60k chars) |
-| Skills | index + `skill_view` on demand | `<available_skills>` + tool `skill` | `<available_skills>` + `formatSkillsForPrompt` |
-| Memory | `MEMORY.md` 2.2k + `USER.md` 1.4k + FTS5 session_search | không built-in (plugin) | `MEMORY.md` + daily notes + vector search + flush + dreaming |
-| Compaction trigger | 50% window | `ctx − max(15%, 16k)`, precompute trước 60k | `min(75%, ctx − 20k)` |
-| Compaction method | prune → protect 3/20 → summary schema → reassemble | summary-over-full-request, keep 15k, checkpoint tag, shrink steps | summarizer cap 160k chars, keep 20k, preserve identifiers, refusal detect |
-| Token estimate | heuristic + usage anchor | `{measured, estimated}` ±15% | char-based bootstrap, token cho compaction |
-| Subagent spawn | `delegate_task` tasks[] | tool `subagent` `{agent, prompt, background, sessionID}` | `sessions_spawn` `{task, context: isolated|fork}` |
-| Context cho child | chỉ goal + context string | chỉ prompt | `isolated` hoặc `fork` transcript |
-| Kết quả về parent | result entry (status/summary) qua queue | text cuối hoặc synthetic user message (background) | announce message vào session parent |
+| Skills | index + `skill_view` on demand | `<available_skills>` + `skill` tool | `<available_skills>` + `formatSkillsForPrompt` |
+| Memory | `MEMORY.md` 2.2k + `USER.md` 1.4k + FTS5 session_search | not built in (plugin) | `MEMORY.md` + daily notes + vector search + flush + dreaming |
+| Compaction trigger | 50% window | `ctx − max(15%, 16k)`, precompute before 60k | `min(75%, ctx − 20k)` |
+| Compaction method | prune → protect 3/20 → summary schema → reassemble | summary-over-full-request, keep 15k, checkpoint tag, shrink steps | summarizer cap 160k chars, keep 20k, preserve identifiers, refusal detection |
+| Token estimate | heuristic + usage anchor | `{measured, estimated}` ±15% | char-based for bootstrap, tokens for compaction |
+| Subagent spawn | `delegate_task` tasks[] | `subagent` tool `{agent, prompt, background, sessionID}` | `sessions_spawn` `{task, context: isolated|fork}` |
+| Child context | goal + context string only | prompt only | `isolated` or `fork` transcript |
+| Result to parent | result entry (status/summary) via queue | last text, or synthetic user message (background) | announce message into the parent session |
 | Depth / concurrency | depth 2, 3 concurrent | depth 1 | 8 concurrent, depth cap |
-| Child tool restriction | leaf mất delegate/clarify/memory | permission `subagent` action | `SUBAGENT_TOOL_DENY_ALWAYS/LEAF` |
-| Follow-up child | `steer`, `stop` | gửi lại `sessionID` | `sessions_send`, `subagents wait/cancel` |
+| Child tool restriction | leaf loses delegate/clarify/memory | `subagent` permission action | `SUBAGENT_TOOL_DENY_ALWAYS/LEAF` |
+| Child follow-up | `steer`, `stop` | resend `sessionID` | `sessions_send`, `subagents wait/cancel` |
 
-## Điểm chung cả 3 đều làm
+## What all 3 have in common
 
-1. Prompt-cache là ưu tiên kiến trúc: phần ổn định đứng trước, phần biến động đẩy xuống cuối hoặc đi qua message.
-2. Skills chỉ đưa index vào prompt, load nội dung on demand.
-3. Tool-call/result pair không bao giờ bị cắt đôi khi compaction.
-4. Summary theo schema cố định (Goal / Decisions / Files / Next steps…).
-5. Subagent cô lập context, chỉ nhận brief, chỉ trả kết quả gọn.
-6. Kết quả subagent nền quay về parent dưới dạng **message** (không phải tool result muộn).
-7. Tool output lớn phải truncate/spill, không đổ hết vào context.
+1. Prompt cache is an architectural priority: stable content goes first, volatile content is pushed to the end or goes through messages.
+2. Skills: only the index goes into the prompt; content is loaded on demand.
+3. A tool-call/result pair is never split during compaction.
+4. Summaries follow a fixed schema (Goal / Decisions / Files / Next steps…).
+5. Subagents have isolated context, receive only a brief, and return only a compact result.
+6. Background subagent results return to the parent as a **message** (not a late tool result).
+7. Large tool output must be truncated/spilled, not dumped wholesale into context.
 
-## Điểm khác biệt đáng chọn
+## Differences worth choosing from
 
-- **Steering**: opencode inbox (queue/steer) sạch nhất về mô hình; openclaw phong phú nhất về mode.
-- **Permission**: opencode ruleset last-match-wins dễ suy luận hơn openclaw layered profiles.
-- **Memory**: openclaw đầy đủ nhất (flush trước compaction là ý hay); hermes gọn nhất.
-- **Durability**: opencode claim + WAL là mạnh nhất nhưng phức tạp; hermes persist-before-execute đủ tốt và đơn giản.
-- **Child context**: openclaw `fork` là lựa chọn duy nhất cho phép child thấy transcript parent — hữu ích cho reviewer.
+- **Steering**: opencode's inbox (queue/steer) is the cleanest model; openclaw has the richest set of modes.
+- **Permission**: opencode's last-match-wins ruleset is easier to reason about than openclaw's layered profiles.
+- **Memory**: openclaw is the most complete (flush before compaction is a good idea); hermes is the most compact.
+- **Durability**: opencode's claim + WAL is the strongest but complex; hermes's persist-before-execute is good enough and simple.
+- **Child context**: openclaw's `fork` is the only option that lets the child see the parent transcript — useful for a reviewer.

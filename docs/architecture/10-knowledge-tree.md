@@ -1,40 +1,40 @@
-# 10 — Kho tri thức dạng cây
+# 10 — Tree-structured knowledge base
 
-## Vấn đề
+## Problem
 
-Bản trước để `knowledge/` thành danh sách phẳng: index trong system prompt chỉ có path và dòng tiêu đề của từng tài liệu. Agent không biết trong một tài liệu có những phần gì, nên muốn tìm một ý nhỏ thì phải `read` cả tài liệu dài hoặc đoán bằng `search`. Thêm tài liệu thì index cứ dài ra, và cũng không có cách nhóm theo chủ đề.
+The previous version kept `knowledge/` as a flat list: the index in the system prompt held only each document's path and title line. The agent could not see which sections a document contained, so to find a small point it had to `read` the whole long document or guess with `search`. Every new document made the index longer, and there was no way to group documents by topic.
 
-## Mô hình
+## Model
 
-**Mỗi bộ tri thức là một cây.** Agent thấy mục lục của các bộ, rồi đi thẳng tới node mình cần.
+**Each knowledge set is a tree.** The agent sees an outline of the sets, then goes straight to the node it needs.
 
 ```
-knowledge/brand.md                 ← gốc của bộ "brand": tổng quan
-knowledge/brand/voice.md           ← node con
-knowledge/brand/voice/examples.md  ← cháu
+knowledge/brand.md                 ← root of the "brand" set: overview
+knowledge/brand/voice.md           ← child node
+knowledge/brand/voice/examples.md  ← grandchild
 knowledge/brand/logo.md
-knowledge/products/tea/menu.md     ← "products" và "products/tea" là node nhóm (không có .md riêng)
-knowledge/pricing.md               ← tài liệu phẳng cũ = một bộ chỉ có gốc
+knowledge/products/tea/menu.md     ← "products" and "products/tea" are group nodes (no own .md)
+knowledge/pricing.md               ← old flat document = a set with only a root
 ```
 
-- **Id của node** là path bỏ `.md`: `knowledge/brand/voice`. Nội dung node nằm ở `<id>.md`; các con nằm dưới `<id>/`.
-- **Bộ tri thức** là mọi node con trực tiếp của `knowledge/`.
-- **Node nhóm**: thư mục không có `.md` riêng. Tiêu đề lấy theo tên thư mục.
-- Định dạng của một node:
+- **Node id** is the path without `.md`: `knowledge/brand/voice`. The node's content is in `<id>.md`; its children are under `<id>/`.
+- **Knowledge sets** are all direct children of `knowledge/`.
+- **Group node**: a directory without its own `.md`. Its title is taken from the directory name.
+- Node format:
   ```md
-  # Tiêu đề
-  > Một dòng: node này nói về gì
-  Nội dung…
+  # Title
+  > One line: what this node is about
+  Content…
   ```
-  Tóm tắt là đoạn đầu ngay sau tiêu đề (dấu `>` có thể bỏ). Nếu ngay sau tiêu đề là một heading thì node không có tóm tắt.
+  The summary is the first paragraph right after the title (the `>` is optional). If a heading comes right after the title, the node has no summary.
 
-Mọi thứ vẫn là bản ghi trong bảng `documents`, nên **không đổi schema và không cần migrate**: tài liệu phẳng cũ tự thành bộ một node, và permission theo prefix (`read knowledge/*`) giữ nguyên.
+Everything is still a record in the `documents` table, so there is **no schema change and no migration**: an old flat document becomes a one-node set, and prefix-based permissions (`read knowledge/*`) stay the same.
 
-Phương án đã cân nhắc rồi bỏ: **một tài liệu cho mỗi bộ, node là các heading**. Cách này gọn khi CEO dán một tài liệu dài, nhưng sửa một node thì phải ghi lại cả tài liệu (dễ đè lẫn nhau), id của node đổi khi đổi tên heading, và `author`/`updatedAt` không tách được theo node. Mỗi node một tài liệu thì giữ được cả ba.
+Option considered and rejected: **one document per set, with headings as nodes**. This is convenient when the CEO pastes one long document, but editing one node means rewriting the whole document (easy to overwrite each other's changes), node ids change when a heading is renamed, and `author`/`updatedAt` cannot be tracked per node. One document per node keeps all three.
 
-## Agent thấy gì (`context/knowledge.ts`)
+## What the agent sees (`context/knowledge.ts`)
 
-**Tier B `<knowledge>`** (mọi vai): mỗi bộ cùng các nhánh cấp 1, mỗi dòng gồm id, tiêu đề, tóm tắt, kích thước và số node con.
+**Tier B `<knowledge>`** (all roles): each set with its level-1 branches. Each line has the id, title, summary, size and number of child nodes.
 
 ```
 - knowledge/brand — Thương hiệu: Tất cả về thương hiệu (420 chars, 3 sub-nodes)
@@ -43,42 +43,42 @@ Phương án đã cân nhắc rồi bỏ: **một tài liệu cho mỗi bộ, no
 - knowledge/pricing — Bảng giá: Gói A: 1 triệu (80 chars)
 ```
 
-Index giới hạn ở 80 dòng. Nếu vượt, chỉ còn các dòng cấp bộ; nếu vẫn vượt thì cắt và nhắc dùng `read knowledge`. Hash và `<workspace-update>` vẫn như cũ (`03`): thêm hoặc sửa một node thì index đổi, và phiên đang chạy nhận diff.
+The index is capped at 80 lines. If it exceeds that, only the set-level lines remain; if it still exceeds, it is truncated with a hint to use `read knowledge`. Hashing and `<workspace-update>` are unchanged (`03`): adding or editing a node changes the index, and running sessions receive the diff.
 
-**`read` có hiểu cây** (mọi vai có `read`, nhân viên vẫn chỉ đọc):
+**`read` understands the tree** (every role with `read`; employees remain read-only):
 
-| Gọi | Trả về |
+| Call | Returns |
 |---|---|
-| `read knowledge` | danh sách các bộ |
-| `read knowledge/brand` hoặc `…/brand.md` | breadcrumb + nội dung node + danh sách node con (id, tiêu đề, tóm tắt) |
-| `read knowledge/products` (node nhóm) | tiêu đề + danh sách node con |
-| `read knowledge/brand/xyz` (không có) | lỗi kèm danh sách con của node cha |
-| `read …` có `offset`/`limit` | đọc tài liệu thô như trước (để phân trang) |
+| `read knowledge` | list of sets |
+| `read knowledge/brand` or `…/brand.md` | breadcrumb + node content + list of child nodes (id, title, summary) |
+| `read knowledge/products` (group node) | title + list of child nodes |
+| `read knowledge/brand/xyz` (does not exist) | error with the parent node's child list |
+| `read …` with `offset`/`limit` | reads the raw document as before (for paging) |
 
-Nội dung của con không bao giờ được gộp vào: agent đi xuống từng nhánh mình cần. `list` và `search` vẫn chạy trên path như cũ.
+Child content is never merged in: the agent descends into each branch it needs. `list` and `search` still work on paths as before.
 
-## CTO quản lý (`knowledge` tool)
+## CTO management (`knowledge` tool)
 
-| Action | Tác dụng |
+| Action | Effect |
 |---|---|
-| `outline` | cả rừng, hoặc toàn bộ cây con của `path` |
-| `save` | tạo/thay một node: `path`, `title`, `summary`, `content` (phần thân). Không có `title` thì `content` phải bắt đầu bằng `# …`. Cha chưa có thì thành node nhóm |
-| `append` | nối vào cuối một node |
-| `move` | đổi tên/chuyển node cùng cả cây con sang `to`. Từ chối khi chuyển vào chính nó hoặc khi đích đã có |
-| `delete` | xóa node. Có con thì phải truyền `recursive: true` |
-| `company`, `ceo` | như cũ (COMPANY.md, USER.md) |
+| `outline` | the whole forest, or the full subtree of `path` |
+| `save` | create/replace a node: `path`, `title`, `summary`, `content` (the body). Without `title`, `content` must start with `# …`. A missing parent becomes a group node |
+| `append` | append to the end of a node |
+| `move` | rename/move a node and its whole subtree to `to`. Refused when moving into itself or when the target already exists |
+| `delete` | delete a node. If it has children, `recursive: true` is required |
+| `company`, `ceo` | unchanged (COMPANY.md, USER.md) |
 
-`path` nhận `brand/voice`, `knowledge/brand/voice` hoặc `…voice.md`. Khoảng trắng đổi thành `-`; `..` bị từ chối.
+`path` accepts `brand/voice`, `knowledge/brand/voice` or `…voice.md`. Spaces become `-`; `..` is refused.
 
-Hướng dẫn trong mô tả tool và trong `cto.md`: một bộ cho mỗi chủ đề, một node cho mỗi ý mà người ta sẽ tra riêng, node nào cũng có tiêu đề và tóm tắt, và xem `outline` trước khi lưu để khỏi tạo bộ trùng. Khi giao việc, CTO chỉ cho nhân viên đúng các node path cần đọc. `DEFAULT_FOLLOW_UP` của scheduler (`09`) cũng lưu phát hiện mới vào đúng nhánh.
+Guidance in the tool description and in `cto.md`: one set per topic, one node per idea that people will look up on its own, every node has a title and a summary, and check `outline` before saving to avoid duplicate sets. When assigning work, the CTO points employees to exactly the node paths they need to read. The scheduler's `DEFAULT_FOLLOW_UP` (`09`) also saves new findings into the right branch.
 
-## UI và API
+## UI and API
 
-- `GET /api/knowledge` → `{ core, tree }`, trong đó `tree` là `KnowledgeNode[]` (id, title, summary, doc, size, updatedAt, author, children).
-- `GET/PUT/DELETE /api/knowledge/file` không đổi: sửa từng tài liệu node.
-- `DELETE /api/knowledge/node?path=…` xóa node cùng cây con.
-- Trang Tri thức có mục "Bộ tri thức" hiển thị dạng cây thu gọn được, với nút "Thêm bộ" và nút `+` ở mỗi node để thêm phần con. Bấm vào một node nhóm rồi lưu thì node đó có nội dung riêng.
+- `GET /api/knowledge` → `{ core, tree }`, where `tree` is `KnowledgeNode[]` (id, title, summary, doc, size, updatedAt, author, children).
+- `GET/PUT/DELETE /api/knowledge/file` unchanged: edits individual node documents.
+- `DELETE /api/knowledge/node?path=…` deletes a node and its subtree.
+- The **Knowledge** (Tri thức) page has a "Knowledge sets" (Bộ tri thức) section shown as a collapsible tree, with an "Add set" (Thêm bộ) button and a `+` button on each node to add a child. Clicking a group node and saving gives that node its own content.
 
-## Test
+## Tests
 
-`src/context/knowledge.test.ts` (id/tóm tắt/node nhóm/index, `read` theo node, các action của tool) và `server.test.ts` "knowledge: …" (API cây, xóa node).
+`src/context/knowledge.test.ts` (id/summary/group nodes/index, per-node `read`, tool actions) and `server.test.ts` "knowledge: …" (tree API, node deletion).

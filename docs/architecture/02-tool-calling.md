@@ -1,6 +1,6 @@
 # 02 — Tool calling
 
-## Định nghĩa tool
+## Tool definition
 
 ```ts
 import { z } from "zod"
@@ -18,31 +18,31 @@ export const read = Tool.define({
 })
 ```
 
-- `input` là zod schema → `z.toJSONSchema()` → normalize (inline `$defs`, flatten `allOf`, bỏ `MIN/MAX_SAFE_INTEGER`) để definition **byte-stable** giữa các request (cache).
-- Validation lỗi → không throw, trả `ToolResult.error` cho model với tối đa 5 issue + args đã gửi (học opencode). Model tự sửa.
-- `execute` trả `{ output: string; content?: Content[]; metadata?: object }`. `content` cho ảnh/file (data-URI).
+- `input` is a zod schema → `z.toJSONSchema()` → normalize (inline `$defs`, flatten `allOf`, drop `MIN/MAX_SAFE_INTEGER`) so the definition is **byte-stable** across requests (cache).
+- Validation error → no throw; return `ToolResult.error` to the model with at most 5 issues + the args that were sent (from opencode). The model fixes the call itself.
+- `execute` returns `{ output: string; content?: Content[]; metadata?: object }`. `content` is for images/files (data URI).
 
 ## Result pipeline
 
 ```
 model emits tool-call
-  → validate(input)                     lỗi → ToolResult.error, không chạy
+  → validate(input)                     error → ToolResult.error, not executed
   → permission.evaluate(action, resource)
        deny  → ToolResult.error("denied")
-       ask   → ctx.ask() block trên Deferred; reject có feedback → error typed cho model
-       allow → tiếp
-  → hooks.before(tool, input)           có thể sửa input / block
-  → execute(input, ctx) với timeout + signal
+       ask   → ctx.ask() blocks on a Deferred; reject with feedback → typed error for the model
+       allow → continue
+  → hooks.before(tool, input)           can modify input / block
+  → execute(input, ctx) with timeout + signal
   → hooks.after(tool, result)
-  → output.truncate(result)             2000 dòng / 50 KiB → spill file, chèn footer
+  → output.truncate(result)             2000 lines / 50 KiB → spill to file, insert footer
   → store.append(ToolResult)
 ```
 
 ### Truncation & spill (`tool/output.ts`)
 
 - `MAX_LINES = 2000`, `MAX_BYTES = 50 * 1024`.
-- Vượt → lưu bản đầy đủ vào tài liệu ẩn `tool-output/<callID>.txt` (qua callback `saveOutput` của harness), output kết thúc bằng `[showing lines 1-N of M; full output saved to <path>, read it with offset/limit]`. Model `read` lại với offset.
-- Tool `bash` dùng `tail` mode (`metadata.tail`): giữ phần cuối thay vì phần đầu (lỗi và kết quả thường ở cuối).
+- Over the limit → save the full output to the hidden document `tool-output/<callID>.txt` (via the harness's `saveOutput` callback); the output ends with `[showing lines 1-N of M; full output saved to <path>, read it with offset/limit]`. The model calls `read` again with an offset.
+- The `bash` tool uses `tail` mode (`metadata.tail`): keeps the end instead of the start (errors and results are usually at the end).
 
 ## Permission (`permission/ruleset.ts`)
 
@@ -51,64 +51,64 @@ type Rule = { action: string; resource: string; effect: "allow" | "ask" | "deny"
 // evaluate = findLast(rule matches action && glob(resource)) ?? { effect: "ask" }
 ```
 
-- Thứ tự merge: `config.permissions` → `agent.permissions` → `session.permissions` (saved "always" của user). Saved rule **không override** rule `deny` có sẵn: check `denied()` trước.
-- Actions chuẩn: `read`, `write`, `webfetch`, `websearch`, `mcp:<server>:<tool>` và nhóm quản trị `MANAGEMENT_ACTIONS` = `delegate`, `hire`, `memory`, `question`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`, `schedule` (chỉ CTO).
-- `write` có resource = path → nhân viên có `{ write, "*", deny }` **rồi** `{ write, "drafts/*", allow }`: deny rộng trước, ngoại lệ hẹp sau.
-- `denied()` (chặn cứng, saved approval không vượt): một rule deny match thì bị chặn, **trừ khi** có một rule allow đứng sau nó, cùng action, resource hẹp hơn hẳn (`drafts/*` so với `*`) và cũng match. Allow đứng trước deny, hay allow rộng bằng hoặc rộng hơn deny (vd. `shell * allow` sau `shell git push* deny`), không gỡ được deny. Deny kế thừa từ phiên cha (`inherit`) nối vào cuối ruleset của con nên con không có ngoại lệ nào đứng sau nó.
-- Bug đã gặp: `capabilityRules` cũ sinh `drafts/* allow` rồi `* deny`, nên nhân viên được tuyển không ghi được gì cả, mà vẫn báo "đã lưu". `fromMarkdown` giờ đưa các deny `action *` lên đầu (`hoistBroadDenies`), nên các dòng `staff` cũ trong DB tự được sửa khi load.
-- Chế độ unattended (cron/background subagent không có người trả lời): `ask` → `deny`.
-- Tắt tool cho agent = rule `{ action: "<tool>", resource: "*", effect: "deny" }`; registry `snapshot(ruleset)` lọc tool bị `deny *` khỏi definitions luôn (tiết kiệm token).
+- Merge order: `config.permissions` → `agent.permissions` → `session.permissions` (the user's saved "always"). A saved rule **does not override** an existing `deny` rule: `denied()` is checked first.
+- Standard actions: `read`, `write`, `webfetch`, `websearch`, `mcp:<server>:<tool>` and the management group `MANAGEMENT_ACTIONS` = `delegate`, `hire`, `memory`, `question`, `knowledge`, `manage_skill`, `staff`, `mcp_manage`, `schedule` (CTO only).
+- `write` has resource = path → employees have `{ write, "*", deny }` **then** `{ write, "drafts/*", allow }`: broad deny first, narrow exception after.
+- `denied()` (hard block, a saved approval cannot bypass it): if a deny rule matches, the call is blocked **unless** there is an allow rule after it, with the same action, a strictly narrower resource (`drafts/*` vs `*`), that also matches. An allow before the deny, or an allow as broad as or broader than the deny (e.g. `shell * allow` after `shell git push* deny`), cannot lift the deny. Denies inherited from the parent session (`inherit`) are appended to the end of the child's ruleset, so the child has no exception after them.
+- Bug encountered: the old `capabilityRules` generated `drafts/* allow` then `* deny`, so hired employees could not write anything, yet still reported "saved". `fromMarkdown` now moves `action *` denies to the top (`hoistBroadDenies`), so old `staff` rows in the DB are fixed automatically on load.
+- Unattended mode (cron/background subagent with nobody to answer): `ask` → `deny`.
+- Disabling a tool for an agent = rule `{ action: "<tool>", resource: "*", effect: "deny" }`; registry `snapshot(ruleset)` also removes tools denied with `deny *` from the definitions (saves tokens).
 
 ## Registry (`tool/registry.ts`)
 
 - `register(tool)`, `snapshot(ruleset, agent) → ToolDefinition[]`.
-- Namespace: MCP tool đặt tên `<server>_<tool>`; description MCP được strip ký tự điều khiển / tag Unicode (chống prompt-injection, học hermes).
-- Tool description có thể **động theo context** (vd `delegate` liệt kê agent được phép) — nhưng phải deterministic trong một session để không vỡ cache.
+- Namespace: MCP tools are named `<server>_<tool>`; MCP descriptions are stripped of control characters / Unicode tag characters (prompt-injection defense, from hermes).
+- A tool description may be **context-dependent** (e.g. `delegate` lists the permitted agents), but it must be deterministic within a session so it does not break the cache.
 
 ## Builtin tools v0.1
 
-Không edit code. Tool tài liệu (`documentTools(docs)`) đọc/ghi bảng `documents` trong DB, không chạm filesystem; path ảo được chuẩn hóa và `..` bị từ chối (`normalizePath`).
+No code editing. Document tools (`documentTools(docs)`) read/write the `documents` table in the DB and do not touch the filesystem; virtual paths are normalized and `..` is rejected (`normalizePath`).
 
-| Tool | Mục đích | Permission action | Ai có |
+| Tool | Purpose | Permission action | Who has it |
 |---|---|---|---|
-| `read` | đọc tài liệu công ty | `read` | mọi vai |
-| `list` | liệt kê "thư mục" tài liệu | `read` | mọi vai |
-| `search` | tìm cụm từ trong tài liệu (không phân biệt hoa thường, cả tiếng Việt) | `read` | mọi vai |
-| `write` | tạo/ghi đè tài liệu | `write` (resource = path, nhân viên chỉ `drafts/*`) | CTO, writer, marketer |
-| `edit` | thay một đoạn chữ chính xác trong tài liệu (`old` → `new`, `all?`); không thấy hoặc thấy nhiều chỗ → lỗi hướng dẫn model sửa | `write` (như trên) | ai có `write` |
-| `bash` | chạy lệnh/code (Python…) trong thư mục làm việc riêng, env không có secret (`15-bash.md`) | `bash` (resource = lệnh); nhân viên chỉ khi có capability `bash` | CTO |
-| `webfetch` | tải trang → text | `webfetch` (resource = hostname) | CTO, researcher, writer, marketer |
-| `websearch` | tìm web (DuckDuckGo HTML, không cần key) | `websearch` | researcher |
-| `question` | hỏi CEO một câu kèm lựa chọn | — (hard deny cho nhân viên) | CTO |
-| `todo` | plan list của phiên | — | mọi vai |
+| `read` | read company documents | `read` | all roles |
+| `list` | list document "folders" | `read` | all roles |
+| `search` | find a phrase in documents (case-insensitive, including Vietnamese) | `read` | all roles |
+| `write` | create/overwrite a document | `write` (resource = path, employees only `drafts/*`) | CTO, writer, marketer |
+| `edit` | replace an exact text span in a document (`old` → `new`, `all?`); not found or multiple matches → error telling the model how to fix it | `write` (as above) | anyone with `write` |
+| `bash` | run commands/code (Python…) in a separate working directory, env without secrets (`15-bash.md`) | `bash` (resource = command); employees only with the `bash` capability | CTO |
+| `webfetch` | fetch a page → text | `webfetch` (resource = hostname) | CTO, researcher, writer, marketer |
+| `websearch` | web search (DuckDuckGo HTML, no key needed) | `websearch` | researcher |
+| `question` | ask the CEO one question with options | — (hard deny for employees) | CTO |
+| `todo` | the session's plan list | — | all roles |
 | `memory` | list/add/replace/remove MEMORY.md | `memory` | CTO |
-| `delegate` | list/spawn/steer/stop nhân viên | `delegate` | CTO |
-| `hire` | tạo vai mới (bảng `staff`) | `hire` | CTO |
-| `staff` | show/edit/fire nhân viên (không đụng CTO) | `staff` (resource = id) | CTO |
-| `knowledge` | các bộ tri thức dạng cây `knowledge/*` (outline/save/append/move/delete), COMPANY.md, USER.md | `knowledge` (resource = action) | CTO |
-| `manage_skill` | tạo/sửa/xóa kỹ năng | `manage_skill` | CTO |
-| `mcp_manage` | nối/bật/tắt/gỡ server MCP | `mcp_manage` (resource = action; `add` là `ask`) | CTO |
-| `schedule` | việc định kỳ: tạo/sửa/tạm dừng/chạy ngay/lịch sử (`09-schedules.md`) | `schedule` (resource = action) | CTO |
-| `skill` | load thân một kỹ năng | `skill` | mọi vai |
-| `<server>_<tool>` | tool từ MCP server (xem `07-ui-server.md`) | `mcp:<server>:<tool>` | mọi vai, trừ khi vai deny `mcp:*` |
+| `delegate` | list/spawn/steer/stop employees | `delegate` | CTO |
+| `hire` | create a new role (`staff` table) | `hire` | CTO |
+| `staff` | show/edit/fire employees (does not touch the CTO) | `staff` (resource = id) | CTO |
+| `knowledge` | tree-shaped knowledge sets `knowledge/*` (outline/save/append/move/delete), COMPANY.md, USER.md | `knowledge` (resource = action) | CTO |
+| `manage_skill` | create/edit/delete skills | `manage_skill` | CTO |
+| `mcp_manage` | connect/enable/disable/remove MCP servers | `mcp_manage` (resource = action; `add` is `ask`) | CTO |
+| `schedule` | recurring jobs: create/edit/pause/run now/history (`09-schedules.md`) | `schedule` (resource = action) | CTO |
+| `skill` | load a skill's body | `skill` | all roles |
+| `<server>_<tool>` | tool from an MCP server (see `07-ui-server.md`) | `mcp:<server>:<tool>` | all roles, unless the role denies `mcp:*` |
 
-## Permission cho người dùng no-code
+## Permission for no-code users
 
-- Harness-level rule mặc định: `{ action: "*", resource: "*", effect: "allow" }`. **Không hỏi CEO.**
-- An toàn đến từ ruleset của từng vai (deny cứng), không từ dialog. Vai do `hire` tạo chỉ chọn được 4 capability, và `write` luôn bị giới hạn `drafts/*`.
-- `ask` chỉ xuất hiện ở `mcp_manage add` của CTO (server stdio chạy lệnh trên máy CEO) hoặc nếu ai đó chủ động viết rule `ask` vào định nghĩa vai.
+- Default harness-level rule: `{ action: "*", resource: "*", effect: "allow" }`. **Never ask the CEO.**
+- Safety comes from each role's ruleset (hard deny), not from dialogs. Roles created by `hire` can only choose from 4 capabilities, and `write` is always limited to `drafts/*`.
+- `ask` only appears in the CTO's `mcp_manage add` (a stdio server runs commands on the CEO's machine) or if someone explicitly writes an `ask` rule into a role definition.
 
 ## MCP (v1.1)
 
 - Config `mcp.<server> = { transport: stdio|http, command|url, enabled, lazy }`.
-- Mỗi tool remote wrap thành `Tool.define` với `input` = JSON Schema thô, permission action `mcp:<server>:<tool>` mặc định `ask`.
-- `notifications/tools/list_changed` → rebuild snapshot (debounce 100ms).
+- Each remote tool is wrapped as `Tool.define` with `input` = raw JSON Schema; permission action `mcp:<server>:<tool>`, default `ask`.
+- `notifications/tools/list_changed` → rebuild the snapshot (100ms debounce).
 
-## Code Mode (v2, tùy chọn)
+## Code Mode (v2, optional)
 
-Một tool `execute({ code })` chạy JS trong sandbox với `tools.*` proxy, học opencode/openclaw. Giảm số round-trip khi model cần gọi 10 tool nhỏ. Để sau vì tăng bề mặt bảo mật.
+A tool `execute({ code })` runs JS in a sandbox with a `tools.*` proxy, from opencode/openclaw. Reduces round trips when the model needs to call 10 small tools. Deferred because it increases the security surface.
 
 ## Doom-loop guard
 
-- Hash `(name, canonicalJSON(args))` của tool-call. 3 lần giống hệt liên tiếp → steer notice; 5 lần → fail turn.
-- Cùng tool trả error 3 lần liên tiếp → steer notice "thử cách khác"; 5 lần → fail.
+- Hash `(name, canonicalJSON(args))` of the tool call. 3 identical in a row → steer notice; 5 → fail the turn.
+- Same tool returns an error 3 times in a row → steer notice "try a different approach"; 5 → fail.

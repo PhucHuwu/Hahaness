@@ -1,48 +1,48 @@
-# 13 — Chat với CTO qua Telegram
+# 13 — Chatting with the CTO via Telegram
 
-CEO nhắn với CTO qua bot Telegram như trên web. CTO trả lời, hỏi lại và báo việc xong cũng qua đó,
-kể cả khi không ai mở web (đi cùng `12-durable-work.md`). Code: `src/channel/telegram.ts`.
+The CEO messages the CTO through a Telegram bot just like on the web. The CTO's replies, follow-up questions and completion reports also go there,
+even when no one has the web UI open (works together with `12-durable-work.md`). Code: `src/channel/telegram.ts`.
 
-## Quyết định
+## Decisions
 
-- **Long polling (`getUpdates`), không dùng webhook.** Không cần domain, HTTPS hay cổng mở trên VPS;
-  chạy được cả trên máy cá nhân. Offset (`update_id` kế tiếp) lưu trong `settings` và được ghi
-  **trước** khi xử lý từng tin: restart giữa chừng thì bỏ tin đó chứ không xử lý hai lần.
-- **Không thêm thư viện**: gọi Bot API bằng `fetch`.
-- **Một bot, một người.** Bot liên kết với đúng một chat riêng (CEO). Liên kết bằng mã ghép nối
-  ngẫu nhiên hiện ở trang Cài đặt: gửi `/start <mã>` (link `t.me/<bot>?start=<mã>` làm việc đó khi
-  bấm Start). Mọi chat khác bị từ chối. Token bot nằm trong bảng `settings` (key `telegram`) và
-  không trả về UI. "Đổi người dùng" bỏ liên kết và tạo mã mới.
-- **Telegram chỉ là một cửa vào phiên của CTO.** Tin của CEO đi qua `harness.send(cto, text, "steer", "ceo")`
-  y như gõ trên web, nên mọi thứ khác (inbox lưu DB, chạy tiếp sau restart, câu hỏi không chặn) tự
-  áp dụng. Web và Telegram dùng chung một cuộc trò chuyện.
-- **Gửi ra theo lượt, không theo nguồn.** Bootstrap nối `onTurnStart`/`onTurnEnd` của phiên CTO vào kênh.
-  Lượt bắt đầu thì nhớ số message hiện có và gửi trạng thái "đang soạn". Lượt kết thúc thì gửi câu trả
-  lời cuối (assistant message cuối có chữ) và câu hỏi `question` kèm bàn phím lựa chọn. Vì thế CEO nhận
-  được cả các lượt **không** bắt đầu từ Telegram: tin gõ trên web, báo cáo nhân viên đánh thức CTO, việc
-  định kỳ.
-  - Lượt lỗi thì báo lỗi; lượt bị dừng (`interrupted`) thì không gửi gì.
-- Câu trả lời cho `question` là tin nhắn bình thường. Bấm nút trên bàn phím Telegram gửi đúng chữ của lựa chọn.
-- Lệnh: `/stop` dừng lượt đang chạy của CTO, `/status` xem ai đang làm việc.
-- Ảnh và file (document) được tải qua `getFile` rồi đính kèm như trên web (`14-uploads.md`); chú thích là nội dung tin.
-- Tin dài cắt thành nhiều tin ≤ 4000 ký tự (Telegram giới hạn 4096), ưu tiên cắt ở chỗ xuống dòng.
-  Gửi chữ thô, không dùng Markdown của Telegram: Markdown của model hay làm Telegram từ chối tin.
+- **Long polling (`getUpdates`), no webhook.** No domain, HTTPS or open port is needed on the VPS;
+  it also works on a personal machine. The offset (next `update_id`) is stored in `settings` and written
+  **before** each message is processed: a restart mid-way drops that message rather than processing it twice.
+- **No new library**: the Bot API is called with `fetch`.
+- **One bot, one person.** The bot is linked to exactly one private chat (the CEO). Linking uses a random pairing code
+  shown on the **Settings** (Cài đặt) page: send `/start <code>` (the link `t.me/<bot>?start=<code>` does this when
+  Start is pressed). All other chats are rejected. The bot token is stored in the `settings` table (key `telegram`) and
+  is not returned to the UI. "Change user" (Đổi người dùng) removes the link and creates a new code.
+- **Telegram is just another entry point into the CTO's session.** CEO messages go through `harness.send(cto, text, "steer", "ceo")`
+  exactly like typing on the web, so everything else (inbox persisted in the DB, continuing after restart, non-blocking questions)
+  applies automatically. Web and Telegram share one conversation.
+- **Output is sent per turn, not per source.** Bootstrap wires the CTO session's `onTurnStart`/`onTurnEnd` to the channel.
+  On turn start it records the current message count and sends the "typing" status. On turn end it sends the final
+  answer (the last assistant message with text) and any `question` with an option keyboard. So the CEO also receives
+  turns that did **not** start from Telegram: messages typed on the web, employee reports that wake the CTO, scheduled
+  work.
+  - A failed turn reports the error; a stopped turn (`interrupted`) sends nothing.
+- An answer to a `question` is a normal message. Pressing a button on the Telegram keyboard sends the option's exact text.
+- Commands: `/stop` stops the CTO's running turn, `/status` shows who is working.
+- Photos and files (documents) are downloaded via `getFile` and attached the same way as on the web (`14-uploads.md`); the caption is the message content.
+- Long messages are split into several messages of ≤ 4000 characters (Telegram's limit is 4096), preferably at line breaks.
+  Sent as plain text, without Telegram Markdown: the model's Markdown often makes Telegram reject the message.
 
-## Không làm
+## Not done
 
-- **Zalo**: Bot API của Zalo còn mới, `getUpdates` được khuyên chỉ dùng thử nghiệm và có báo cáo lỗi
-  không nhận tin; bản production cần webhook HTTPS. Tạm bỏ, làm khi đã có domain + HTTPS trên VPS.
-- Chat với nhân viên qua Telegram: CEO nói với CTO; muốn xem nhân viên thì dùng web.
-- Nhiều người dùng / nhóm chat.
+- **Zalo**: Zalo's Bot API is new, `getUpdates` is recommended only for testing and there are reports of it
+  not receiving messages; production needs an HTTPS webhook. Dropped for now; to be done once a domain + HTTPS exist on the VPS.
+- Chatting with employees via Telegram: the CEO talks to the CTO; to see employees, use the web.
+- Multiple users / group chats.
 
 ## API
 
-| Route | Việc |
+| Route | Purpose |
 |---|---|
-| `GET /api/telegram` | Trạng thái: đã cấu hình, tên bot, đã liên kết với ai, mã ghép nối, lỗi gần nhất |
-| `PUT /api/telegram {token}` | Kiểm tra token bằng `getMe`, lưu, tạo mã ghép nối, chạy polling |
-| `POST /api/telegram/unlink` | Bỏ liên kết, tạo mã mới |
-| `DELETE /api/telegram` | Ngắt hẳn, xoá token |
+| `GET /api/telegram` | Status: configured, bot name, who it is linked to, pairing code, last error |
+| `PUT /api/telegram {token}` | Validate the token with `getMe`, save, create a pairing code, start polling |
+| `POST /api/telegram/unlink` | Remove the link, create a new code |
+| `DELETE /api/telegram` | Disconnect completely, delete the token |
 
-Lỗi 409 từ Telegram nghĩa là bot đang được nơi khác dùng (webhook hoặc server thứ hai chạy cùng
-token): chỉ một tiến trình được poll một bot.
+A 409 error from Telegram means the bot is in use elsewhere (a webhook or a second server running with the same
+token): only one process may poll a bot.

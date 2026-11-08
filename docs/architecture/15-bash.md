@@ -1,44 +1,44 @@
-# 15 — Tool `bash`: agent chạy code khi việc cần
+# 15 — The `bash` tool: agents run code when the task needs it
 
-Người dùng là CEO không code, nhưng **agent thì được code** nếu đó là cách làm xong việc: cộng doanh
-thu trên file Excel 5.000 dòng, thống kê, vẽ biểu đồ, đổi định dạng file. Ước lượng bằng mắt trên CSV là
-sai. Quyết định cũ "không có shell" (00/02) được thay bằng tài liệu này. Code ở `src/tool/builtin/bash.ts`.
+The user is a CEO who does not code, but **agents may code** when that is the way to get the job done: summing revenue
+in a 5,000-row Excel file, statistics, charts, file format conversion. Estimating by eye over CSV is
+wrong. The old decision "no shell" (00/02) is replaced by this document. Code is in `src/tool/builtin/bash.ts`.
 
-## Quyết định
+## Decisions
 
-- **Một tool `bash`** (`command`, `timeout?` tối đa 600 giây). Output stdout và stderr được gộp lại;
-  output dài thì giữ phần cuối (`tail`) và lưu bản đầy đủ vào `tool-output/`. Mã thoát khác 0 thì
-  trả về lỗi kèm `[exit code N]`.
-- **Thư mục làm việc riêng** `<thư mục DB>/workspace` (đổi được bằng `HAHANESS_WORKDIR`), không phải
-  thư mục mã nguồn. `HOME` cũng trỏ vào đó, nên `pip install --user` và cache nằm gọn trong thư mục này.
-- **File CEO gửi có bản gốc ở `workspace/uploads/`** (`attach(..., workdir)`). Khối `<attachments>` ghi
-  `original="uploads/x.xlsx"`, nên agent đọc bằng pandas hay openpyxl để tính chính xác, thay vì tính
-  trên bản chữ.
-- **Tài liệu công ty vẫn nằm trong DB.** File tạo ra trong `workspace` không phải tài liệu: muốn đưa cho
-  CEO thì `write` vào `deliverables/` hoặc ghi số liệu vào báo cáo. Prompt của tool và của CTO nói rõ
-  điều này.
-- **Không lộ secret:** process con chỉ nhận PATH, LANG, TZ và vài biến tương tự. API key nằm trong DB và
-  biến môi trường của server, nên code agent viết không đọc được qua env.
-- **Timeout hoặc dừng thì giết cả process group** (`detached` + `kill(-pid)`), nên `python` chạy nền
-  cũng dừng theo.
-- `concurrency: serial`: lệnh trong cùng một lượt chạy lần lượt.
+- **One `bash` tool** (`command`, `timeout?` up to 600 seconds). stdout and stderr are merged;
+  long output keeps the end (`tail`) and the full output is saved to `tool-output/`. A non-zero exit code
+  returns an error with `[exit code N]`.
+- **Separate working directory** `<DB directory>/workspace` (configurable via `HAHANESS_WORKDIR`), not the
+  source directory. `HOME` also points there, so `pip install --user` and caches stay inside this directory.
+- **Files sent by the CEO have their originals in `workspace/uploads/`** (`attach(..., workdir)`). The `<attachments>` block
+  says `original="uploads/x.xlsx"`, so the agent reads them with pandas or openpyxl to compute exactly instead of computing
+  on the text version.
+- **Company documents stay in the DB.** Files created in `workspace` are not documents: to give something to
+  the CEO, `write` it into `deliverables/` or put the figures in the report. The tool prompt and the CTO prompt state
+  this explicitly.
+- **No secret leakage:** the child process only receives PATH, LANG, TZ and a few similar variables. API keys live in the DB and
+  in the server's environment variables, so code written by the agent cannot read them via env.
+- **On timeout or stop, the whole process group is killed** (`detached` + `kill(-pid)`), so a backgrounded `python`
+  also stops.
+- `concurrency: serial`: commands within the same turn run one after another.
 
-## Ai được dùng
+## Who can use it
 
-- **CTO** có sẵn (`bash * allow` trong `cto.md`).
-- **Nhân viên** chỉ dùng được khi có capability `bash` (trang Nhân sự, hoặc `hire` với
-  `capabilities: [..., "bash"]`). Nếu không có, `employeeRules` deny `bash`. Vai builtin hiện không có
-  `bash`; CTO tự chạy hoặc tuyển một vai phân tích dữ liệu.
+- **The CTO** has it by default (`bash * allow` in `cto.md`).
+- **Employees** can only use it with the `bash` capability (the **Staff** (Nhân sự) page, or `hire` with
+  `capabilities: [..., "bash"]`). Without it, `employeeRules` denies `bash`. No builtin role currently has
+  `bash`; the CTO runs it itself or hires a data analysis role.
 
-## Rủi ro (đã chấp nhận)
+## Risks (accepted)
 
-Đây **không phải sandbox**: lệnh chạy bằng quyền của tiến trình server. Code agent viết có thể đọc file
-DB, gọi mạng, xoá file mà user hệ thống được phép xoá. Rủi ro chính là prompt injection: trang web hay
-file độc hại dụ agent chạy lệnh. Giảm nhẹ hiện có:
+This is **not a sandbox**: commands run with the server process's permissions. Code written by the agent can read the DB
+file, access the network, and delete any file the system user is allowed to delete. The main risk is prompt injection: a malicious web page or
+file tricks the agent into running commands. Current mitigations:
 
-- Không truyền env (key không nằm sẵn trong biến môi trường của lệnh).
-- Thư mục làm việc tách khỏi mã nguồn.
-- Nhân viên phải được cấp quyền rõ ràng.
+- No env passed through (keys are not present in the command's environment variables).
+- Working directory separate from the source code.
+- Employees must be granted permission explicitly.
 
-Khi chạy trên VPS, nên chạy server bằng một user riêng ít quyền, hoặc trong container. Bước sau, nếu
-cần: chạy lệnh trong Docker (`--network none`, mount mỗi `workspace`), giữ nguyên interface của tool.
+On a VPS, run the server as a separate low-privilege user, or in a container. Next step, if
+needed: run commands in Docker (`--network none`, mount each `workspace`), keeping the tool's interface unchanged.

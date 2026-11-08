@@ -2,6 +2,19 @@
   "name": "hahaness",
   "version": "0.1.0",
   "private": true,
+  "description": "A virtual company run by AI agents for no-code users: you are the CEO, a CTO agent delegates to employee agents.",
+  "keywords": ["ai-agents", "multi-agent", "llm", "agent-harness", "no-code", "mcp"],
+  "homepage": "https://github.com/PhucHuwu/Hahaness#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PhucHuwu/Hahaness.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PhucHuwu/Hahaness/issues"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
   "type": "module",
   "scripts": {
     "serve": "tsx src/server/index.ts",

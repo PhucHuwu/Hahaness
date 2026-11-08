@@ -1,10 +1,10 @@
-# 07 — Giao diện web và server
+# 07 — Web UI and server
 
-## Vì sao
+## Why
 
-Người dùng no-code không dùng terminal. Giao diện là thứ biến harness thành "công ty": chat với CTO, xem nhân viên đang làm gì, sửa tri thức, thêm kỹ năng, nối công cụ ngoài — tất cả không mở file bằng tay.
+No-code users do not use a terminal. The UI is what turns the harness into a "company": chat with the CTO, see what employees are doing, edit knowledge, add skills, connect external tools — all without opening files by hand.
 
-## Kiến trúc
+## Architecture
 
 ```
 ui/ (React + Vite, build tĩnh)  ──HTTP JSON + SSE──▶  src/server/ (node:http)  ──▶  Harness
@@ -14,75 +14,77 @@ ui/ (React + Vite, build tĩnh)  ──HTTP JSON + SSE──▶  src/server/ (no
                                                         └─ routes-schedule: việc định kỳ (09-schedules.md)
 ```
 
-- **Server không có framework.** `src/server/http.ts` = router pattern `:param`, JSON body, SSE bus, static. ~150 dòng.
-- **Một luồng SSE `/api/events` cho cả app.** Mọi `LoopEvents` (text, tool-start/end, notice, usage) + harness-level (`session`, `turn`, `question`) phát qua đây kèm `sessionID`; UI lọc theo phiên đang xem. Không có kênh riêng per-session → đơn giản, và trang Chat thấy được cả nhân viên con.
-- **`src/bootstrap.ts`** là wiring chuẩn: mở DB (`dbPath` / `HAHANESS_DB` / `.hahaness/hahaness.db`), tạo mẫu COMPANY/USER/MEMORY nếu thiếu, đọc config từ DB, rồi dựng documents, vai, tool, skills, MCP, harness. Server gọi; test server cũng gọi. Không có CLI: web là giao diện duy nhất. `close()` là async (dừng MCP, đóng DB).
-- **Transcript hiển thị = messages trong store.** UI reducer (`ui/src/pages/chat-state.ts`) áp SSE lên mảng `Message` theo đúng cấu trúc store (assistant có parts text/tool-call/tool-result), nên reload trang render giống hệt lúc stream.
-- **Provider lỗi không làm server chết.** `App.providerError` được giữ; `/api/config` trả về, Settings hiển thị, gửi tin nhắn trả 409. Lưu config → `Harness.reconfigure()` dựng provider mới; phiên đang sống giữ model cũ (system prompt/model đóng băng per-session — nhất quán với `03`).
+(In the diagram: "build tĩnh" = static build; "việc định kỳ" = recurring jobs.)
 
-## Phiên
+- **The server has no framework.** `src/server/http.ts` = router with `:param` patterns, JSON body, SSE bus, static files. ~150 lines.
+- **One SSE stream `/api/events` for the whole app.** All `LoopEvents` (text, tool-start/end, notice, usage) + harness-level events (`session`, `turn`, `question`) go through it with a `sessionID`; the UI filters by the session being viewed. No per-session channel → simpler, and the Chat page can see child employees too.
+- **`src/bootstrap.ts`** is the standard wiring: open the DB (`dbPath` / `HAHANESS_DB` / `.hahaness/hahaness.db`), create COMPANY/USER/MEMORY templates if missing, read config from the DB, then build documents, roles, tools, skills, MCP, harness. The server calls it; server tests call it too. No CLI: the web is the only interface. `close()` is async (stops MCP, closes the DB).
+- **Displayed transcript = messages in the store.** The UI reducer (`ui/src/pages/chat-state.ts`) applies SSE to a `Message` array with exactly the store's structure (assistant has text/tool-call/tool-result parts), so a page reload renders identically to the live stream.
+- **Provider errors do not kill the server.** `App.providerError` is kept; `/api/config` returns it, Settings displays it, sending a message returns 409. Saving config → `Harness.reconfigure()` builds new providers; live sessions keep the old model (system prompt/model are frozen per session — consistent with `03`).
 
-- `POST /api/sessions` tạo phiên gốc, mặc định với CTO; `agent` = id nhân viên → CEO chat riêng với nhân viên đó (rule nhân viên, xem `04`). `GET /api/sessions` = union phiên sống + phiên trong store (mới nhất trước).
-- Sidebar Chat **mỗi người một dòng** (1 agent = 1 phiên, xem `11-one-session-per-agent.md`): CTO trước, rồi từng nhân viên (`/api/staff`), rồi nhân viên đã nghỉ nhưng còn phiên. Dòng nhân viên hiện trạng thái từ `SessionView.work`. Bấm vào → `POST /api/sessions { agent }` mở phiên của người đó (tạo nếu chưa có). Không có nút tạo phiên mới. Phiên từ trước thay đổi này nằm trong mục "Lịch sử cũ", chỉ xem (`home: false`; gửi tin nhắn → 409).
-- **Giao tiếp** (`#chat/comms`, `GET /api/conversations`): dòng thời gian dựng lại từ bảng `events` (cộng inbox đang chờ), không lưu riêng. Brief = user message `source: agent` có `<brief>` trong phiên nhân viên; steer = user message `source: agent` khác (theo `from`); báo cáo = `<subagent …>` trong phiên người giao (tool-result `delegate` foreground hoặc message `source: subagent`, kể cả còn nằm trong inbox ở direct mode). CEO chat thẳng với nhân viên không hiện ở đây. Phiên con kiểu cũ (`parentID`) vẫn đọc theo cách cũ.
-- `Harness.resume(id)`: nạp lại từ bảng `events` (messages + compaction cuối), dựng system prompt **từ tài liệu hiện tại** — nghĩa là sửa COMPANY.md rồi resume phiên cũ sẽ thấy bản mới. Đây là ngoại lệ có chủ ý của "đóng băng per-session": resume là ranh giới phiên mới về mặt cache.
-- `POST …/messages` push inbox và trả `{ok}` ngay; kết quả đi qua SSE. Trạng thái `running` theo `turn` event.
-- **Direct mode** `@writer <task>` từ UI → `POST …/direct` → `spawn(background, wakeLead: false)`: việc vào phiên của writer, báo cáo rơi vào inbox CTO nhưng **không đánh thức** CTO (tránh CTO tự trả lời CEO khi CEO không hỏi). CEO thấy kết quả ở phiên của writer (sidebar) và CTO thấy ở lượt sau. `@` chỉ dùng trong phiên agent primary (400 nếu gọi từ phiên nhân viên).
-- Tool `question` không chờ: lượt kết thúc, UI hiện câu hỏi từ tool-call cuối chưa được trả lời, trả lời = gửi tin nhắn (`12-durable-work.md`). Permission `ask`: server giữ promise, phát `question` event, UI render ô trả lời, `POST /api/questions/:id` resolve.
+## Sessions
 
-## Tri thức (Knowledge)
+- `POST /api/sessions` creates a root session, with the CTO by default; `agent` = employee id → the CEO chats privately with that employee (employee rules, see `04`). `GET /api/sessions` = union of live sessions + sessions in the store (newest first).
+- The Chat sidebar has **one row per person** (1 agent = 1 session, see `11-one-session-per-agent.md`): CTO first, then each employee (`/api/staff`), then dismissed employees that still have a session. Employee rows show status from `SessionView.work`. Clicking → `POST /api/sessions { agent }` opens that person's session (creates it if missing). There is no new-session button. Sessions from before this change are in the "Old history" (Lịch sử cũ) section, read-only (`home: false`; sending a message → 409).
+- **Communications** (Giao tiếp) (`#chat/comms`, `GET /api/conversations`): a timeline rebuilt from the `events` table (plus pending inbox), not stored separately. Brief = user message with `source: agent` containing `<brief>` in the employee's session; steer = other user messages with `source: agent` (by `from`); report = `<subagent …>` in the assigner's session (foreground `delegate` tool-result or a message with `source: subagent`, including ones still in the inbox in direct mode). The CEO chatting directly with an employee does not appear here. Old-style child sessions (`parentID`) are still read the old way.
+- `Harness.resume(id)`: reloads from the `events` table (messages + last compaction), builds the system prompt **from the current documents** — so editing COMPANY.md and then resuming an old session shows the new version. This is a deliberate exception to "frozen per session": resume is a new-session boundary as far as the cache is concerned.
+- `POST …/messages` pushes to the inbox and returns `{ok}` immediately; results come via SSE. The `running` state follows the `turn` event.
+- **Direct mode** `@writer <task>` from the UI → `POST …/direct` → `spawn(background, wakeLead: false)`: the job goes into the writer's session; the report lands in the CTO's inbox but does **not wake** the CTO (prevents the CTO from replying to the CEO when the CEO did not ask). The CEO sees the result in the writer's session (sidebar) and the CTO sees it on its next turn. `@` is only usable in a primary agent's session (400 if called from an employee session).
+- The `question` tool does not wait: the turn ends, the UI shows the question from the last unanswered tool call, answering = sending a message (`12-durable-work.md`). Permission `ask`: the server holds a promise, emits a `question` event, the UI renders an answer box, `POST /api/questions/:id` resolves it.
 
-| Mục | Backend | Ai thấy |
+## Knowledge (Tri thức)
+
+| Item | Backend | Who sees it |
 |---|---|---|
-| `COMPANY.md`, `USER.md`, `MEMORY.md` | `/api/knowledge/file` | theo `03` |
-| `knowledge/**` | cùng endpoint, chỉ nhận path trong `knowledge/` hoặc 3 tài liệu lõi (khác → 400); `GET /api/knowledge` trả `tree`, `DELETE /api/knowledge/node` xóa cả cây con | **index** cây (mỗi bộ + nhánh cấp 1) vào Tier B cho **mọi vai**; nội dung đọc theo node qua `read` (`10-knowledge-tree.md`) |
-| Nhân viên (bảng `staff`) | `/api/staff` (+ `/markdown`) | CEO sửa frontmatter + job description; không sửa/đuổi CTO. Cho nghỉ = `fired = 1` |
+| `COMPANY.md`, `USER.md`, `MEMORY.md` | `/api/knowledge/file` | per `03` |
+| `knowledge/**` | same endpoint, only accepts paths in `knowledge/` or the 3 core documents (otherwise → 400); `GET /api/knowledge` returns `tree`, `DELETE /api/knowledge/node` deletes the whole subtree | the tree **index** (each set + first-level branches) goes into Tier B for **every role**; content is read per node via `read` (`10-knowledge-tree.md`) |
+| Employees (table `staff`) | `/api/staff` (+ `/markdown`) | the CEO edits frontmatter + job description; cannot edit/dismiss the CTO. Dismiss = `fired = 1` |
 
-Tài liệu CEO sửa từ UI ghi `author = "ceo"`; CTO sửa qua tool ghi id vai. UI hiện "ai sửa, lúc nào".
+Documents the CEO edits from the UI record `author = "ceo"`; CTO edits via tools record the role id. The UI shows "who edited, when".
 
-Index knowledge cap 80 dòng; vượt thì chỉ còn cấp bộ, rồi gợi ý `read knowledge`. Không đưa nội dung vào prompt — tài liệu tham khảo có thể lớn; model tự `read` khi brief/câu hỏi liên quan.
+The knowledge index is capped at 80 lines; beyond that only the set level remains, followed by a hint to `read knowledge`. Content is not put into the prompt — reference documents can be large; the model `read`s them itself when the brief/question is relevant.
 
-## Kết quả (Results)
+## Results (Kết quả)
 
-| Endpoint | Tác dụng |
+| Endpoint | Effect |
 |---|---|
-| `GET /api/results` | `{ deliverables, drafts, uploads }` — path, title (heading đầu), updatedAt, author |
-| `GET /api/results/file?path=` | nội dung; path ngoài `deliverables/`/`drafts/` → 400 |
-| `GET /api/results/download?path=` | tải `.md`, `content-disposition` có `filename*=UTF-8''…` cho tên tiếng Việt |
-| `DELETE /api/results/file?path=` | xóa |
+| `GET /api/results` | `{ deliverables, drafts, uploads }` — path, title (first heading), updatedAt, author |
+| `GET /api/results/file?path=` | content; path outside `deliverables/`/`drafts/` → 400 |
+| `GET /api/results/download?path=` | download `.md`, `content-disposition` has `filename*=UTF-8''…` for Vietnamese file names |
+| `DELETE /api/results/file?path=` | delete |
 
-Trang **Kết quả** (`#results/<encodeURIComponent(path)>`, decode khi đọc vì `location.hash` giữ `%XX`) tự tải lại khi SSE có `tool-end` của `write`. `.docx`/`.pdf` để sau.
+The **Results** page (`#results/<encodeURIComponent(path)>`, decoded on read because `location.hash` keeps `%XX`) reloads itself when SSE delivers a `tool-end` for `write`. `.docx`/`.pdf` later.
 
-## Kỹ năng (Skills)
+## Skills (Kỹ năng)
 
-Bảng `skills`: mỗi kỹ năng là markdown có frontmatter `name`, `description`; CTO tạo/sửa bằng `manage_skill`. Chỉ `<available_skills>` (id + description) vào Tier A; tool `skill` trả thân. Thêm/sửa/xóa qua UI → tác động ở **phiên mới**. Test: `harness.test.ts` "skills: index in Tier A…".
+Table `skills`: each skill is markdown with `name`, `description` frontmatter; the CTO creates/edits them with `manage_skill`. Only `<available_skills>` (id + description) goes into Tier A; the `skill` tool returns the body. Add/edit/delete via the UI → takes effect in **new sessions**. Test: `harness.test.ts` "skills: index in Tier A…".
 
 ## MCP
 
-`src/mcp/client.ts` — JSON-RPC 2.0 tối thiểu, không thêm dependency:
+`src/mcp/client.ts` — minimal JSON-RPC 2.0, no added dependency:
 
-- Transport `stdio` (spawn, newline-delimited) và `http` (streamable HTTP: POST, nhận JSON hoặc SSE, `mcp-session-id`).
-- Method dùng: `initialize` → `notifications/initialized` → `tools/list` (phân trang) → `tools/call`. Không resources/prompts/sampling (v0.3).
+- Transports `stdio` (spawn, newline-delimited) and `http` (streamable HTTP: POST, receives JSON or SSE, `mcp-session-id`).
+- Methods used: `initialize` → `notifications/initialized` → `tools/list` (paginated) → `tools/call`. No resources/prompts/sampling (v0.3).
 
-`src/mcp/manager.ts` — cấu hình trong bảng `mcp_servers`, kết nối lúc khởi động, đăng ký tool. CEO thêm từ UI, hoặc CTO qua `mcp_manage` (`add` cần CEO duyệt):
+`src/mcp/manager.ts` — configuration in the `mcp_servers` table, connects at startup, registers tools. The CEO adds servers from the UI, or the CTO via `mcp_manage` (`add` requires CEO approval):
 
-- Tên tool `<server>_<tool>` (ký tự lạ → `_`), permission action `mcp:<server>:<tool>` → vai nào muốn chặn thì rule `{ action: "mcp:*", effect: deny }` trong định nghĩa vai. Mặc định mọi vai thấy tool MCP (harness-level `allow *`).
-- `inputSchema` của server dùng nguyên cho model; harness validate bằng `z.record` (không parse lại schema JSON của bên thứ ba).
-- Output: nối các `content[].text`; image/khác → placeholder.
-- Bật/tắt/gỡ → `ToolRegistry.unregister`; phiên đang chạy mất tool ở step kế (snapshot tool lấy mỗi `wake`).
+- Tool name `<server>_<tool>` (unusual characters → `_`), permission action `mcp:<server>:<tool>` → a role that wants to block them uses the rule `{ action: "mcp:*", effect: deny }` in its role definition. By default every role sees MCP tools (harness-level `allow *`).
+- The server's `inputSchema` is passed to the model as is; the harness validates with `z.record` (does not re-parse third-party JSON schema).
+- Output: concatenates `content[].text`; images/other → placeholder.
+- Enable/disable/remove → `ToolRegistry.unregister`; running sessions lose the tool at the next step (the tool snapshot is taken on every `wake`).
 
-Ví dụ server stdio: `examples/mcp/echo-server.ts`. Test end-to-end: `server.test.ts` "mcp: add stdio server…" (spawn thật qua `npx tsx`).
+Example stdio server: `examples/mcp/echo-server.ts`. End-to-end test: `server.test.ts` "mcp: add stdio server…" (real spawn via `npx tsx`).
 
 ## UI
 
-- React + Vite, không router/state lib. Hash router `#chat/<id>`, `#results/<path>`, `#knowledge`, `#skills`, `#mcp`, `#settings`.
-- Một bảng màu trung tính + một màu nhấn, font hệ thống, không gradient/glass/emoji trong UI. Mọi control có hành vi thật; trạng thái rỗng/lỗi/đang tải là thật (xem skill `antislop-ui`).
-- Chat: danh sách phiên, transcript (tool call là `<details>` gập), nhân viên con với link sang phiên của họ, ô hỏi/permission, Dừng, gợi ý `@employee`.
-- Settings: model mặc định, providers (OpenAI-compatible / custom module), API key bị che (`••••`) và được giữ nguyên nếu gửi lại, "Gọi thử".
-- `npm run ui` = API server (7331) + Vite dev (5173, proxy `/api`). `npm run ui:build` → `ui/dist`, `npm run serve` serve tĩnh.
+- React + Vite, no router/state library. Hash router `#chat/<id>`, `#results/<path>`, `#knowledge`, `#skills`, `#mcp`, `#settings`.
+- One neutral palette + one accent color, system font, no gradients/glass/emoji in the UI. Every control has real behavior; empty/error/loading states are real (see the `antislop-ui` skill).
+- Chat: session list, transcript (tool calls are collapsed `<details>`), child employees with links to their sessions, question/permission box, Stop, `@employee` suggestions.
+- Settings: default model, providers (OpenAI-compatible / custom module), API keys masked (`••••`) and kept unchanged if sent back, "Test call" (Gọi thử).
+- `npm run ui` = API server (7331) + Vite dev (5173, proxy `/api`). `npm run ui:build` → `ui/dist`, `npm run serve` serves it statically.
 
-## Giới hạn hiện tại
+## Current limitations
 
-- Server mặc định bind `127.0.0.1` (`HOST` để đổi). Mọi `/api/*` cần đăng nhập (`16-auth.md`).
-- SSE không replay: mở trang giữa lượt thì thấy từ sự kiện kế tiếp; `GET /api/sessions/:id` trả transcript đã persist nên phần text đã stream vẫn hiện sau khi lượt kết thúc.
-- Tri thức chỉ nhận text (tạo/sửa trong editor, hoặc dán cho CTO). Chưa upload PDF/DOCX — xem roadmap.
+- The server binds `127.0.0.1` by default (`HOST` to change). Every `/api/*` requires login (`16-auth.md`).
+- SSE does not replay: opening the page mid-turn shows events from the next one onward; `GET /api/sessions/:id` returns the persisted transcript, so already-streamed text still appears after the turn ends.
+- Knowledge accepts text only (create/edit in the editor, or paste it to the CTO). No PDF/DOCX upload yet — see the roadmap.

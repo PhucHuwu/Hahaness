@@ -1,74 +1,74 @@
-# 12 — Việc không phụ thuộc trình duyệt và chịu được restart
+# 12 — Work that does not depend on the browser and survives restarts
 
-Mục tiêu: hệ thống chạy trên VPS, CEO dùng qua web. Đóng tab, tắt máy, hay server khởi động lại
-(deploy, reboot, crash) đều không làm mất việc đang làm dở, việc đang xếp hàng hay báo cáo chưa đọc.
+Goal: the system runs on a VPS and the CEO uses it through the web. Closing the tab, turning off the computer, or a server restart
+(deploy, reboot, crash) must not lose work in progress, queued work or unread reports.
 
-## Mức 1: không có gì chờ trình duyệt
+## Level 1: nothing waits on the browser
 
-- Lượt chạy luôn nằm trên server (`Harness.wake`); SSE chỉ để xem. Đóng web không dừng gì.
-- **`question` không chặn lượt.** Trước đây tool đứng chờ câu trả lời tối đa 10 phút; trong lúc đó
-  CTO không nhận được báo cáo hay chạy lịch. Giờ nó giống `ask_lead`: trả `metadata.endTurn`, lượt
-  kết thúc, câu hỏi nằm trong lịch sử chat dưới dạng tool-call. Câu trả lời của CEO là **tin nhắn
-  kế tiếp** (mở web lúc nào trả lời lúc đó, kể cả hôm sau).
-- UI (`openQuestion` trong `Chat.tsx`) hiện câu hỏi còn chờ: lượt cuối của agent có tool-call
-  `question` thành công và CEO chưa nhắn gì sau đó. Bấm lựa chọn = gửi tin nhắn bình thường.
-- Server không giữ promise nào cho `question` nữa. `/api/questions` chỉ còn **permission ask**
-  (rule `effect: "ask"`); mặc định bootstrap cho phép tất cả nên hiếm khi có. Ask đó vẫn chỉ trong
-  bộ nhớ: restart thì lượt đang hỏi bị cắt và được chạy lại như mọi lượt dở.
-- Vẫn ẩn `question` khi chạy lịch (`unattended`) và khi đang làm việc được giao: không có ai để hỏi
-  ngay lúc đó, model nên quyết hoặc báo lên trong câu trả lời cuối.
+- Turns always run on the server (`Harness.wake`); SSE is only for viewing. Closing the web UI stops nothing.
+- **`question` does not block the turn.** Previously the tool waited up to 10 minutes for an answer; during that time
+  the CTO could not receive reports or run schedules. Now it works like `ask_lead`: it returns `metadata.endTurn`, the turn
+  ends, and the question stays in the chat history as a tool call. The CEO's answer is the **next
+  message** (answer whenever the web UI is opened, even the next day).
+- The UI (`openQuestion` in `Chat.tsx`) shows a pending question: the agent's last turn has a successful
+  `question` tool call and the CEO has not sent anything since. Clicking an option = sending a normal message.
+- The server no longer holds any promise for `question`. `/api/questions` now only covers **permission asks**
+  (rule `effect: "ask"`); the bootstrap default allows everything, so they are rare. Those asks are still in
+  memory only: on restart, the turn that was asking is cut off and rerun like any unfinished turn.
+- `question` is still hidden during scheduled runs (`unattended`) and while working on an assigned task: there is no one to ask
+  at that moment, so the model should decide or raise the issue in its final answer.
 
-## Mức 2: lưu trạng thái làm việc vào DB
+## Level 2: persist work state to the DB
 
-Dùng event log sẵn có (`events`, xem `08-storage.md`), không thêm bảng. Event mới:
+Uses the existing event log (`events`, see `08-storage.md`), no new table. New events:
 
-| Event | Ghi khi | Fold ra |
+| Event | Written when | Folds into |
 |---|---|---|
-| `inbox {item, front?}` | `Inbox.push`/`pushFront` | `SessionState.inbox` (đúng thứ tự) |
-| `inbox-taken {ids}` | loop lấy item ra (`drainAll`/`drainSteer`) | bỏ khỏi inbox |
-| `assign {task}` | `spawn` (ghi vào phiên nhân viên) | `SessionState.assignments` |
-| `assign-state {id, started?, waiting?}` | `begin` (bắt đầu), `settle` (hỏi lại bằng `ask_lead`) | cập nhật |
-| `assign-end {id}` | xong / lỗi / dừng / huỷ khi còn xếp hàng | xoá |
+| `inbox {item, front?}` | `Inbox.push`/`pushFront` | `SessionState.inbox` (in order) |
+| `inbox-taken {ids}` | the loop takes items out (`drainAll`/`drainSteer`) | removed from inbox |
+| `assign {task}` | `spawn` (written to the employee's session) | `SessionState.assignments` |
+| `assign-state {id, started?, waiting?}` | `begin` (started), `settle` (asked back via `ask_lead`) | updated |
+| `assign-end {id}` | done / error / stopped / cancelled while still queued | removed |
 
-- Core giữ hẹp: `Inbox` nhận một `InboxLog` tuỳ chọn (`added`, `taken`); harness nối nó vào store
-  trong `activate`. `Inbox.restore` nạp lại mà không ghi lần nữa.
-- Item được ghi `inbox-taken` ngay khi lấy ra, trước khi thành message trong transcript. Tắt giữa
-  hai bước thì mất item đó (cửa sổ cực nhỏ, chấp nhận) chứ không bao giờ gửi trùng.
-- `Assignment` có `id`. Sau restart, việc khôi phục có `reported: true`: không còn tool call nào
-  đang chờ kết quả foreground, nên mọi báo cáo vào inbox phiên người giao (giống việc nền).
-- `activeSubagents` (giới hạn việc song song) không tính việc khôi phục; nó chỉ đếm việc giao
-  trong tiến trình hiện tại.
+- Core stays narrow: `Inbox` takes an optional `InboxLog` (`added`, `taken`); the harness wires it to the store
+  in `activate`. `Inbox.restore` reloads without writing again.
+- An item is logged as `inbox-taken` as soon as it is taken out, before it becomes a message in the transcript. A shutdown between
+  the two steps loses that item (very small window, accepted) but never delivers it twice.
+- `Assignment` has an `id`. After a restart, recovered tasks have `reported: true`: no tool call is
+  still waiting for a foreground result, so every report goes into the assigner's session inbox (like background tasks).
+- `activeSubagents` (the parallel task limit) does not count recovered tasks; it only counts tasks assigned
+  in the current process.
 
-## `Harness.recover()` lúc khởi động
+## `Harness.recover()` at startup
 
-`bootstrap` gọi `recover()` sau khi dựng harness (bỏ qua khi chưa cấu hình provider, hoặc `recover: false` cho test).
-Với phiên chính của mỗi agent:
+`bootstrap` calls `recover()` after building the harness (skipped when no provider is configured, or with `recover: false` for tests).
+For each agent's home session:
 
-| Trạng thái đã lưu | Hành động |
+| Saved state | Action |
 |---|---|
-| Lượt bị cắt (`claim` chưa `release`) | `resume` vá tool-call mồ côi, xếp `RESUMED_AFTER_CRASH` vào inbox, **chạy lượt luôn** |
-| Đang làm việc được giao và inbox còn input (brief, câu trả lời) | chạy lượt |
-| Đang làm việc được giao, inbox rỗng, không chờ câu trả lời | lượt đã xong nhưng chưa kịp báo → `settle` gửi báo cáo, chạy việc kế |
-| Không có việc đang làm nhưng còn việc xếp hàng | `next` bắt đầu việc kế |
-| Nhân viên chờ câu trả lời (`waiting`) | không làm gì; câu trả lời đến qua `delegate steer` |
-| Chỉ có inbox (vd báo cáo `wakeLead: false` ở CTO) | không đánh thức; nạp cùng tin nhắn kế tiếp như trước restart |
+| Turn cut off (`claim` without `release`) | `resume` patches orphaned tool calls, queues `RESUMED_AFTER_CRASH` into the inbox, **runs the turn immediately** |
+| Working on an assigned task and the inbox still has input (brief, answer) | run a turn |
+| Working on an assigned task, inbox empty, not waiting for an answer | the turn finished but the report was not sent → `settle` sends the report, runs the next task |
+| No current task but queued tasks remain | `next` starts the next task |
+| Employee waiting for an answer (`waiting`) | do nothing; the answer arrives via `delegate steer` |
+| Only an inbox (e.g. a `wakeLead: false` report at the CTO) | do not wake; it is loaded with the next message, as before the restart |
 
-- Đây là thay đổi so với quy tắc cũ "không tự chạy tiếp sau crash" (`01-agent-loop.md`). CEO đã
-  chọn: làm lại phần dở tốn thêm tiền gọi model nhưng việc không bị bỏ dở khi không ai mở web.
-- Báo cáo của nhân viên đánh thức CTO như bình thường (`wakeLead`), nên chuỗi CTO → nhân viên →
-  CTO tiếp tục trọn vẹn sau restart.
-- `RESUMED_AFTER_CRASH` không bị xếp hai lần nếu server tắt lần nữa trước khi lượt kịp lấy nó.
+- This changes the old rule "do not continue automatically after a crash" (`01-agent-loop.md`). The CEO
+  chose this: redoing the unfinished part costs extra model calls, but work is not abandoned when no one has the web UI open.
+- Employee reports wake the CTO as usual (`wakeLead`), so the chain CTO → employee →
+  CTO completes after a restart.
+- `RESUMED_AFTER_CRASH` is not queued twice if the server shuts down again before the turn picks it up.
 
-## Lịch định kỳ
+## Scheduled runs
 
-Lần chạy đang `running` lúc tắt được đánh dấu `interrupted` (scheduler không gắn lại `onReport`
-được sau restart). Phần việc vẫn được `recover` làm tiếp và báo cáo vẫn về CTO; chỉ trạng thái
-lần chạy trên trang Lịch là không theo dõi tiếp. `unattended` không được khôi phục: nếu CTO tự
-chạy tiếp sau restart, nó có `question`, và câu hỏi chỉ đơn giản nằm chờ CEO trong chat.
+A run that is `running` at shutdown is marked `interrupted` (the scheduler cannot reattach `onReport`
+after a restart). The work itself is still continued by `recover` and the report still goes to the CTO; only the
+run's status on the **Schedules** (Lịch) page is no longer tracked. `unattended` is not restored: if the CTO
+continues on its own after a restart, it has `question`, and the question simply waits for the CEO in the chat.
 
-## Còn lại khi lên VPS
+## Remaining for VPS deployment
 
-- Server mặc định bind `127.0.0.1` và **chưa có đăng nhập**. Đưa ra internet cần reverse proxy
-  (HTTPS + basic auth) hoặc thêm auth vào server trước.
-- Chạy bằng process manager (systemd, pm2, Docker `restart: always`) để server tự lên lại; DB
-  SQLite (`.hahaness/hahaness.db` hoặc `HAHANESS_DB`) phải nằm trên ổ bền.
+- The server binds to `127.0.0.1` by default and **has no login yet**. Exposing it to the internet requires a reverse proxy
+  (HTTPS + basic auth) or adding auth to the server first.
+- Run it under a process manager (systemd, pm2, Docker `restart: always`) so the server comes back up on its own; the SQLite
+  DB (`.hahaness/hahaness.db` or `HAHANESS_DB`) must be on durable storage.

@@ -1,65 +1,103 @@
 # Hahaness
 
-Một **công ty ảo** chạy bằng AI cho người không biết lập trình. Bạn là **CEO**: bạn chỉ ra lệnh. **CTO** giao việc cho nhân viên (researcher, writer, marketer, analyst…), **tự tuyển người mới** khi cần, và tự quản lý tri thức, quy trình, công cụ của công ty. Kết quả là tài liệu, kế hoạch, nội dung — xem và tải ở trang **Kết quả**.
+[![Node.js](https://img.shields.io/badge/node-%E2%89%A522.5-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
+[![React](https://img.shields.io/badge/UI-React%2019-61DAFB?logo=react&logoColor=black)](ui/)
+[![Storage](https://img.shields.io/badge/storage-SQLite%20(node%3Asqlite)-003B57?logo=sqlite&logoColor=white)](docs/architecture/08-storage.md)
 
-Kiến trúc học từ [hermes-agent](docs/research/01-hermes-agent.md), [opencode](docs/research/02-opencode.md), [openclaw](docs/research/03-openclaw.md) ([so sánh](docs/research/04-comparison.md)), bỏ phần coding-agent.
+**A virtual company run by AI agents, for people who don't write code.**
 
-## Chạy
+You are the **CEO**: you give instructions in plain language. The **CTO** agent breaks the work down, delegates it to employee agents (researcher, writer, marketer, analyst…), hires new roles when nobody fits, and maintains the company's knowledge, skills and tools. The output is documents, plans and content you read and download from the web interface.
+
+<!-- Screenshot: save a capture of the Chat page as docs/assets/chat.png, then uncomment.
+![Hahaness chat](docs/assets/chat.png)
+--> 
+
+## Features
+
+- **Multi-agent delegation.** The CTO delegates through structured briefs, runs employees in parallel or in the background, and receives structured reports. Employees can ask their lead questions mid-task.
+- **Self-managing company.** The CTO hires new roles at runtime, turns recurring procedures into reusable skills, and files reference material into a knowledge tree.
+- **Long-running sessions.** Token budgeting anchored on real provider usage, automatic compaction with structured checkpoints, overflow recovery, and per-session token tracking broken down by content type.
+- **Durable work.** Inboxes and assignments live in the database; after a restart the server resumes unfinished work.
+- **Scheduled jobs.** "Every day at 2 AM, have the researcher check market news" becomes a cron schedule that runs inside the CTO's session.
+- **Any model.** OpenAI-compatible endpoints (OpenAI, OpenRouter, Ollama, vLLM, LiteLLM, CLIProxyAPI…), Anthropic with prompt caching, or a custom provider module. Fallback models per agent and per company.
+- **Extensible.** MCP servers (stdio and streamable HTTP), file uploads (PDF, Excel, Word, images), sandboxed `bash`, and a Telegram channel for chatting with the CTO from your phone.
+- **Single-file state.** Conversations, staff, knowledge, skills, results and configuration all live in one SQLite file.
+
+## Quick start
+
+Requires **Node.js 22.5+** (for the built-in `node:sqlite`).
 
 ```sh
 npm install
-npm run ui        # mở giao diện web tại http://localhost:5173
+npm run ui        # API server on :7331 + web UI on http://localhost:5173
 ```
 
-Vào **Cài đặt** để khai báo provider/model (hoặc đặt `OPENAI_API_KEY` trước khi chạy).
-
-Toàn bộ công ty — hội thoại, nhân viên, tri thức, kỹ năng, kết quả, cấu hình — nằm trong **một file** `.hahaness/hahaness.db` (SQLite) trong thư mục bạn đứng khi chạy lệnh. Backup hay chuyển máy chỉ cần copy file đó. Muốn đặt chỗ khác: `HAHANESS_DB=D:\cong-ty.db npm run ui`.
-
-Bạn không cần sửa file nào. Cứ nói với CTO:
+1. On first launch the server prints a **setup code** in its log. Open the web UI and use it to set a password.
+2. Open **Settings** and add a provider and default model. Alternatively, set `OPENAI_API_KEY` (or `ANTHROPIC_API_KEY`) before starting.
+3. Go to **Chat** and talk to the CTO:
 
 ```
-CEO> công ty mình bán khóa học tiếng Anh online cho người đi làm, ghi nhớ giúp
-CEO> đây là bảng giá 2026: …  lưu lại cho mọi người dùng
-CEO> báo cáo tuần luôn làm theo 3 phần: số liệu, việc xong, việc tuần sau
-CEO> viết cho tôi chuỗi 3 email chào mừng khách hàng mới
-CEO> @writer viết lại email số 2 ngắn hơn một nửa
+CEO> We sell online English courses for working professionals. Remember that.
+CEO> Here is the 2026 price list: …  save it for everyone.
+CEO> Write a 3-email welcome sequence for new customers.
+CEO> @writer make email 2 half as long
 ```
 
-CTO lưu mô tả công ty và tài liệu vào **Tri thức**, biến cách làm lặp lại thành **Kỹ năng**, tự `hire` vai mới (ví dụ `seo-specialist`) khi không ai hợp việc, và nộp kết quả cuối vào **Kết quả**. Nối công cụ ngoài (MCP) thì CTO hỏi bạn duyệt trước.
+The UI is in Vietnamese and has seven pages: Chat, Results, Knowledge, Skills, Schedules, MCP and Settings.
 
-Việc lặp lại cũng chỉ cần nói: `CEO> mỗi 2h sáng cho researcher đọc tin thị trường, điều gì mới thì lưu vào tri thức`. CTO tạo **lịch**; tới giờ công ty tự thức dậy, giao việc, CTO lưu kết quả và để lại một phiên tóm tắt cho bạn đọc sau.
-
-Giao diện có 7 trang: **Chat**, **Kết quả** (xem, chép, tải `.md`), **Tri thức** (công ty, về bạn, ghi nhớ, tài liệu, nhân viên), **Kỹ năng**, **Lịch** (việc định kỳ, lịch sử chạy), **MCP**, **Cài đặt**. Các trang ngoài Chat chủ yếu để xem; vẫn sửa tay được.
-
-Các lệnh khác:
+## Running in production
 
 ```sh
-npm run ui:build  # build ui/dist, rồi
-npm run serve     # server tự serve UI tĩnh tại http://127.0.0.1:7331
-npm test          # test với provider giả + MCP server giả, không cần API key
-npm run typecheck
+npm run ui:build   # build the static UI into ui/dist
+npm run serve      # serve API + UI on http://127.0.0.1:7331
 ```
 
-Server mặc định chỉ nghe `127.0.0.1` (đặt `HOST=0.0.0.0` để mở ra ngoài, nên dùng sau reverse proxy HTTPS). Lần đầu mở web phải đặt mật khẩu bằng **mã cài đặt** in trong log server (`16-auth.md`).
+The server listens on `127.0.0.1` by default. Set `HOST=0.0.0.0` to expose it, preferably behind an HTTPS reverse proxy. See [16-auth](docs/architecture/16-auth.md).
 
-## Tài liệu
+### Environment variables
 
-| | |
+| Variable | Purpose |
 |---|---|
-| [00-overview](docs/architecture/00-overview.md) | Mục tiêu, người dùng no-code, mô hình công ty, nguyên tắc |
-| [01-agent-loop](docs/architecture/01-agent-loop.md) | Turn/step, Outcome, inbox queue/steer, tool song song, interrupt, retry |
-| [02-tool-calling](docs/architecture/02-tool-calling.md) | `Tool.define`, pipeline, ruleset, tool có sẵn, permission cho no-code |
-| [03-context-engineering](docs/architecture/03-context-engineering.md) | System tiers, tài liệu công ty, budget, compaction, memory, context cho nhân viên |
-| [04-multi-agent](docs/architecture/04-multi-agent.md) | Vai, `hire`, `delegate`, ResultEntry, isolation |
-| [05-roadmap](docs/architecture/05-roadmap.md) | Lộ trình |
-| [06-providers](docs/architecture/06-providers.md) | Cấu hình provider, OpenAI-compatible, custom provider module |
-| [07-ui-server](docs/architecture/07-ui-server.md) | Giao diện web, API + SSE, knowledge/skills/results, MCP client, giới hạn |
-| [08-storage](docs/architecture/08-storage.md) | Một file SQLite, schema, tool quản trị của CTO |
-| [09-schedules](docs/architecture/09-schedules.md) | Việc định kỳ: cron, chạy trong phiên CTO, chạy bù, tool bắt buộc |
-| [10-knowledge-tree](docs/architecture/10-knowledge-tree.md) | Kho tri thức: mỗi bộ là một cây, index theo nhánh, `read` theo node |
-| [11-one-session-per-agent](docs/architecture/11-one-session-per-agent.md) | Mỗi agent một phiên chat: giao việc xếp hàng, lịch chạy trong phiên CTO, phiên cũ chỉ xem |
-| [12-durable-work](docs/architecture/12-durable-work.md) | Việc không phụ thuộc trình duyệt; inbox/việc được giao lưu DB, server lên lại tự làm tiếp |
-| [13-telegram](docs/architecture/13-telegram.md) | CEO chat với CTO qua bot Telegram (long polling, ghép nối bằng mã) |
-| [14-uploads](docs/architecture/14-uploads.md) | File gửi kèm: PDF/Excel/Word thành tài liệu `uploads/`, ảnh gửi thẳng cho model |
-| [15-bash](docs/architecture/15-bash.md) | Agent chạy code khi việc cần (tính toán, xử lý file); thư mục làm việc riêng, không lộ secret |
-| [16-auth](docs/architecture/16-auth.md) | Đăng nhập web: một mật khẩu, mã cài đặt lần đầu, cookie phiên, chặn CSRF và dò mật khẩu |
+| `HAHANESS_DB` | Path of the SQLite file. Default: `.hahaness/hahaness.db` in the current directory. |
+| `HAHANESS_WORKDIR` | Working directory for the `bash` tool. Default: `workspace/` next to the database. |
+| `HAHANESS_MODEL` | Overrides the default model (`provider/model`). |
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL` | Fallback OpenAI-compatible provider when none is configured in Settings. |
+| `ANTHROPIC_API_KEY` | Fallback Anthropic provider. |
+| `HOST`, `PORT` | Bind address and port of the server (default `127.0.0.1:7331`). |
+
+Back up or move a company by copying its database file.
+
+## Development
+
+```sh
+npm test           # all tests; scripted fake providers and MCP server, no API key needed
+npm run typecheck  # server and UI
+npx tsx --test --test-name-pattern="compaction" src/harness.test.ts   # focused run
+```
+
+Contributor and agent guidelines are in [AGENTS.md](AGENTS.md).
+
+## Architecture
+
+The design borrows from [hermes-agent](docs/research/01-hermes-agent.md), [opencode](docs/research/02-opencode.md) and [openclaw](docs/research/03-openclaw.md) ([comparison](docs/research/04-comparison.md)), without the coding-agent parts.
+
+| Document | Topic |
+|---|---|
+| [00-overview](docs/architecture/00-overview.md) | Goals, no-code users, the company model, principles |
+| [01-agent-loop](docs/architecture/01-agent-loop.md) | Turns and steps, outcomes, queue/steer inbox, parallel tools, interrupts, retries |
+| [02-tool-calling](docs/architecture/02-tool-calling.md) | `Tool.define`, execution pipeline, rulesets, built-in tools, permissions |
+| [03-context-engineering](docs/architecture/03-context-engineering.md) | System tiers, company documents, token budget and tracking, compaction, memory |
+| [04-multi-agent](docs/architecture/04-multi-agent.md) | Roles, `hire`, `delegate`, result entries, isolation |
+| [05-roadmap](docs/architecture/05-roadmap.md) | Roadmap |
+| [06-providers](docs/architecture/06-providers.md) | Provider configuration, OpenAI-compatible, Anthropic, custom modules |
+| [07-ui-server](docs/architecture/07-ui-server.md) | Web UI, API and SSE, MCP client, limits |
+| [08-storage](docs/architecture/08-storage.md) | Single SQLite file, schema, CTO admin tools |
+| [09-schedules](docs/architecture/09-schedules.md) | Cron jobs inside the CTO session, catch-up runs, required tools |
+| [10-knowledge-tree](docs/architecture/10-knowledge-tree.md) | Knowledge as trees, per-branch index, node reads |
+| [11-one-session-per-agent](docs/architecture/11-one-session-per-agent.md) | One chat per agent, queued assignments, read-only history |
+| [12-durable-work](docs/architecture/12-durable-work.md) | Work that survives browser close and server restarts |
+| [13-telegram](docs/architecture/13-telegram.md) | Chatting with the CTO through a Telegram bot |
+| [14-uploads](docs/architecture/14-uploads.md) | Attachments: documents become `uploads/`, images go to the model |
+| [15-bash](docs/architecture/15-bash.md) | Running code in a private working directory without leaking secrets |
+| [16-auth](docs/architecture/16-auth.md) | Single-password login, setup code, session cookie, CSRF and brute-force protection |

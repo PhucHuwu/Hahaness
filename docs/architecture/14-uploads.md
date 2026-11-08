@@ -1,32 +1,32 @@
-# 14 — File CEO gửi lên (PDF, Excel, Word, ảnh)
+# 14 — Files uploaded by the CEO (PDF, Excel, Word, images)
 
-CEO gửi kèm file khi nhắn CTO, trên web (nút 📎, kéo thả hoặc dán) hoặc qua Telegram. Code ở
+The CEO attaches files when messaging the CTO, on the web (the 📎 button, drag and drop, or paste) or via Telegram. Code is in
 `src/upload/`.
 
-## Quyết định
+## Decisions
 
-- **Chuyển file thành chữ một lần, lúc nhận.** Agent không có tool đọc file nhị phân. File được chuyển
-  thành chữ và lưu thành tài liệu `uploads/<tên>.md`, nên `read`, `search` và permission theo path hoạt
-  động như mọi tài liệu khác. Nhân viên được CTO giao việc cũng đọc được file đó qua path.
-- **Nội dung đi kèm tin nhắn.** Tin của CEO có thêm một text part `<attachments>`. File ngắn
-  (≤ 12.000 ký tự) được đưa nguyên văn vào đó. File dài chỉ kèm 2.000 ký tự đầu cùng hướng dẫn đọc
-  tiếp bằng `read(path, offset, limit)`, để một bảng Excel lớn không chiếm hết context.
-- **Ảnh gửi thẳng cho model** (part `image`; Anthropic `image`, OpenAI `image_url` data URL). Ảnh
-  không lưu thành tài liệu. Model không hỗ trợ ảnh sẽ báo lỗi từ provider.
-- **Thư viện:** chỉ thêm `unpdf` (pdf.js đóng gói sẵn, không phụ thuộc native) cho PDF. Excel và Word
-  là zip + XML, nên được đọc bằng `node:zlib` (`zip.ts`) và regex trên XML.
-  - Excel ra CSV theo từng sheet. Ngày tháng giữ dạng số serial; agent được nhắc điều này.
-  - Word ra đoạn văn, heading thành `#`, bảng thành `| a | b |`.
-- PDF scan (không có lớp chữ) được báo rõ để CEO gửi dạng ảnh. Chưa có OCR.
-- **Giới hạn:** 20 MB mỗi file, 5 MB mỗi ảnh; body JSON tối đa ~110 MB (file đi dạng base64 trong JSON,
-  không cần multipart). Telegram chỉ cho bot tải file ≤ 20 MB.
-- Loại file không hỗ trợ (`.doc`, `.xls` cũ, `.exe`…) bị từ chối với thông báo tiếng Việt. Tin nhắn
-  không được gửi đi, nên CEO có thể sửa rồi gửi lại.
-- Bản gốc mọi file cũng được lưu vào thư mục làm việc của `bash` (`uploads/<tên>`) để code tính chính xác (`15-bash.md`).
-- Trùng tên thì không ghi đè: file mới thành `uploads/bao-cao.pdf (2).md`.
-- UI: tin nhắn hiện danh sách file (link sang trang Kết quả → "File bạn gửi") và ảnh thu nhỏ thay vì
-  khối `<attachments>`.
+- **Convert files to text once, on receipt.** Agents have no tool for reading binary files. Files are converted
+  to text and saved as `uploads/<name>.md` documents, so `read`, `search` and path-based permissions work
+  like for any other document. Employees assigned work by the CTO can also read those files by path.
+- **Content travels with the message.** The CEO's message gets an extra `<attachments>` text part. Short files
+  (≤ 12,000 characters) are included verbatim. Long files include only the first 2,000 characters plus instructions to read
+  on with `read(path, offset, limit)`, so a large Excel sheet does not fill the context.
+- **Images go straight to the model** (part `image`; Anthropic `image`, OpenAI `image_url` data URL). Images
+  are not saved as documents. Models without image support return an error from the provider.
+- **Libraries:** only `unpdf` (prebundled pdf.js, no native dependencies) is added, for PDF. Excel and Word
+  are zip + XML, so they are read with `node:zlib` (`zip.ts`) and regex on the XML.
+  - Excel becomes CSV per sheet. Dates stay as serial numbers; the agent is told about this.
+  - Word becomes paragraphs, headings become `#`, tables become `| a | b |`.
+- Scanned PDFs (no text layer) are reported clearly so the CEO can send them as images. No OCR yet.
+- **Limits:** 20 MB per file, 5 MB per image; JSON body up to ~110 MB (files are sent as base64 in JSON,
+  no multipart needed). Telegram only lets bots download files ≤ 20 MB.
+- Unsupported file types (`.doc`, legacy `.xls`, `.exe`…) are rejected with a Vietnamese message. The message
+  is not sent, so the CEO can fix it and resend.
+- The original of every file is also saved into the `bash` working directory (`uploads/<name>`) so code can compute exactly (`15-bash.md`).
+- Name collisions do not overwrite: the new file becomes `uploads/bao-cao.pdf (2).md`.
+- UI: the message shows a file list (links to the **Results** (Kết quả) page → "Files you sent" (File bạn gửi)) and image thumbnails instead of
+  the `<attachments>` block.
 
-## Chưa làm
+## Not done yet
 
-- OCR cho PDF scan, file `.doc`/`.xls`/`.pptx`.
+- OCR for scanned PDFs, `.doc`/`.xls`/`.pptx` files.
