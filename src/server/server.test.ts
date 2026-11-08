@@ -1,9 +1,9 @@
 import { test, before, after } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { startServer } from "./index.ts"
 import type { App } from "../bootstrap.ts"
 import { Db } from "../core/db.ts"
@@ -21,7 +21,14 @@ before(async () => {
   const seed = new Db(dbPath)
   saveConfig(seed, { defaultModel: "scripted/any", providers: { scripted: { type: "custom", module: join(root, "examples", "providers", "scripted.ts") } } })
   seed.close()
-  const s = await startServer({ cwd: dir, dbPath, port: 0, uiDir: join(dir, "no-ui"), auth: false, updates: false })
+  // Chợ ứng dụng đọc catalog tạm trỏ tới echo server stdio (không cần mạng).
+  const catalog = join(dir, "catalog.json")
+  await writeFile(catalog, JSON.stringify({
+    version: 1,
+    updatedAt: "2026-01-01",
+    items: [{ id: "echo-market", kind: "mcp", title: "Echo", description: "test", config: { type: "stdio", command: "npx", args: ["tsx", join(root, "examples", "mcp", "echo-server.ts")] } }],
+  }))
+  const s = await startServer({ cwd: dir, dbPath, port: 0, uiDir: join(dir, "no-ui"), auth: false, updates: false, catalogUrl: pathToFileURL(catalog).href })
   base = `http://127.0.0.1:${(s.server.address() as { port: number }).port}`
   app = s.app
   close = s.close
@@ -210,6 +217,26 @@ test("mcp: add stdio server, tools registered as <server>_<tool>, model can call
   assert.equal(rm.status, 200)
   assert.deepEqual(await get("/api/mcp"), [])
   assert.equal(app.db.sql.prepare("SELECT 1 FROM mcp_servers WHERE id = ?").get("echo-test"), undefined)
+})
+
+test("marketplace: catalog lists items with installed state, install writes an MCP server", async () => {
+  type View = { source: string; error: string | null; items: Array<{ id: string; installed: boolean; state: string | null }> }
+  const v = await get<View>("/api/marketplace")
+  assert.equal(v.source, "remote", v.error ?? "")
+  assert.deepEqual(v.items.map((i) => [i.id, i.installed, i.state]), [["echo-market", false, null]])
+
+  const { status, data } = await send<{ state: string; tools: Array<{ toolName: string }>; error?: string }>("POST", "/api/marketplace/echo-market/install")
+  assert.equal(status, 200, JSON.stringify(data))
+  assert.equal(data.state, "connected", data.error)
+  assert.deepEqual(data.tools.map((t) => t.toolName), ["echo-market_echo"])
+  assert.equal(app.mcp.saved("echo-market")?.type, "stdio")
+  assert.equal((await get<View>("/api/marketplace")).items[0]?.installed, true)
+
+  const missing = await send<{ error: string }>("POST", "/api/marketplace/nope/install")
+  assert.equal(missing.status, 400)
+
+  await fetch(base + "/api/mcp/echo-market", { method: "DELETE" })
+  assert.equal((await get<View>("/api/marketplace")).items[0]?.installed, false)
 })
 
 test("results: deliverables and drafts are listed, viewed, downloaded and deleted", async () => {

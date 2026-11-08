@@ -21,6 +21,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY --chown=node:node package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
+COPY --chown=node:node catalog.json ./
 COPY --chown=node:node src ./src
 COPY --chown=node:node examples ./examples
 COPY --from=build --chown=node:node /app/ui/dist ./ui/dist

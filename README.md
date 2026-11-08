@@ -44,7 +44,7 @@ CEO> Write a 3-email welcome sequence for new customers.
 CEO> @writer make email 2 half as long
 ```
 
-The UI is in Vietnamese and has seven pages: Chat, Results, Knowledge, Skills, Schedules, MCP and Settings.
+The UI is in Vietnamese and has eight pages: Chat, Results, Knowledge, Skills, Schedules, MCP, Marketplace and Settings.
 
 ## Running in production
 
@@ -79,6 +79,7 @@ The server listens on `127.0.0.1` by default. Set `HOST=0.0.0.0` to expose it, p
 | `HOST`, `PORT` | Bind address and port of the server (default `127.0.0.1:7331`; the Docker image sets `HOST=0.0.0.0`). |
 | `TZ` | Time zone for schedules (`docker-compose.yml` defaults to `Asia/Ho_Chi_Minh`). |
 | `HAHANESS_UPDATE_URL`, `HAHANESS_UPDATE_CHANNEL` | Where the daily "new version" check asks (default: GitHub Releases; `off` disables it) and the channel (`stable`). |
+| `HAHANESS_CATALOG_URL` | Marketplace catalog (default: `catalog.json` from this repository; `file://` or `off` for intranet installs, which then use the bundled copy). |
 
 Back up or move a company by copying its database file.
 
@@ -118,3 +119,4 @@ The design borrows from [hermes-agent](docs/research/01-hermes-agent.md), [openc
 | [17-slash-commands](docs/architecture/17-slash-commands.md) | `/help`, `/stop`, `/compact`, `/new` and other chat commands on web and Telegram |
 | [18-deployment](docs/architecture/18-deployment.md) | Docker image and compose file, data volume, reverse proxy, backup and upgrades |
 | [19-updates](docs/architecture/19-updates.md) | Instance ID, version reporting, daily "new version" check and notice |
+| [20-marketplace](docs/architecture/20-marketplace.md) | "Chợ ứng dụng": static `catalog.json`, one-click install of hosted MCP servers |

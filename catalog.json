@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-09",
+  "items": [
+    {
+      "id": "exa",
+      "kind": "mcp",
+      "title": "Exa – tìm kiếm web",
+      "description": "Tìm kiếm web và đọc nội dung trang bằng công cụ tìm kiếm Exa. Bổ sung cho tool websearch có sẵn khi cần kết quả sâu hơn hoặc đọc nguyên trang.",
+      "tags": ["tìm kiếm", "web"],
+      "publisher": "Exa",
+      "homepage": "https://exa.ai",
+      "config": { "type": "http", "url": "https://mcp.exa.ai/mcp" }
+    },
+    {
+      "id": "huggingface",
+      "kind": "mcp",
+      "title": "Hugging Face Hub",
+      "description": "Tìm model, dataset và Space trên Hugging Face; xem chi tiết và đọc file trong repo. Dùng khi công ty cần chọn model AI hoặc dữ liệu mở.",
+      "tags": ["AI", "dữ liệu"],
+      "publisher": "Hugging Face",
+      "homepage": "https://huggingface.co/mcp",
+      "config": { "type": "http", "url": "https://huggingface.co/mcp" }
+    },
+    {
+      "id": "mslearn",
+      "kind": "mcp",
+      "title": "Microsoft Learn",
+      "description": "Tra cứu tài liệu chính thức của Microsoft (Azure, Microsoft 365, Windows, .NET) và tìm ví dụ mã. Trả lời chính xác hơn khi hỏi về sản phẩm Microsoft.",
+      "tags": ["tài liệu", "Microsoft"],
+      "publisher": "Microsoft",
+      "homepage": "https://learn.microsoft.com/training/support/mcp",
+      "config": { "type": "http", "url": "https://learn.microsoft.com/api/mcp" }
+    },
+    {
+      "id": "context7",
+      "kind": "mcp",
+      "title": "Context7 – tài liệu thư viện lập trình",
+      "description": "Tài liệu mới nhất của hàng nghìn thư viện và framework lập trình. Hữu ích khi nhân viên viết code bằng tool bash và cần đúng API hiện tại.",
+      "tags": ["tài liệu", "lập trình"],
+      "publisher": "Upstash",
+      "homepage": "https://context7.com",
+      "config": { "type": "http", "url": "https://mcp.context7.com/mcp" }
+    },
+    {
+      "id": "cloudflare-docs",
+      "kind": "mcp",
+      "title": "Cloudflare Docs",
+      "description": "Tìm trong tài liệu Cloudflare (Workers, Pages, DNS, bảo mật). Dành cho công ty dùng hạ tầng Cloudflare.",
+      "tags": ["tài liệu", "hạ tầng"],
+      "publisher": "Cloudflare",
+      "homepage": "https://developers.cloudflare.com",
+      "config": { "type": "http", "url": "https://docs.mcp.cloudflare.com/mcp" }
+    }
+  ]
+}

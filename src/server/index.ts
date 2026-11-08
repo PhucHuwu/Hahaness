@@ -10,6 +10,7 @@ import { adminRoutes } from "./routes-admin.ts"
 import { scheduleRoutes } from "./routes-schedule.ts"
 import { Auth, AuthError, MIN_PASSWORD, sameOrigin } from "./auth.ts"
 import { UpdateChecker, instanceID } from "./updates.ts"
+import { Marketplace } from "./marketplace.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, "..", "..")
@@ -33,6 +34,8 @@ export interface ServerOptions {
   auth?: boolean
   /** false → không tự kiểm tra bản mới (test). Mặc định bật; HAHANESS_UPDATE_URL=off cũng tắt. */
   updates?: boolean
+  /** URL catalog chợ ứng dụng; mặc định HAHANESS_CATALOG_URL. `off` → chỉ dùng catalog.json đóng gói (test). */
+  catalogUrl?: string
 }
 
 /**
@@ -89,6 +92,7 @@ export async function startServer(opts: ServerOptions) {
   const instance = instanceID(app.db)
   const updates = new UpdateChecker({ current: VERSION, instance, url: process.env.HAHANESS_UPDATE_URL, channel: process.env.HAHANESS_UPDATE_CHANNEL })
   if (opts.updates !== false) updates.start()
+  const market = new Marketplace({ mcp: app.mcp, bundledPath: join(root, "catalog.json"), url: opts.catalogUrl ?? process.env.HAHANESS_CATALOG_URL })
   const router = new Router()
   const wrap = (fn: () => unknown) => {
     try {
@@ -125,6 +129,15 @@ export async function startServer(opts: ServerOptions) {
   router.get("/api/health", () => ({ ok: true, version: VERSION, instance, db: app.db.path, providerError: app.providerError ?? null, clients: bus.size }))
   router.get("/api/updates", () => updates.state)
   router.post("/api/updates/check", () => updates.check())
+  router.get("/api/marketplace", () => market.view())
+  router.post("/api/marketplace/refresh", () => market.view(true))
+  router.post("/api/marketplace/:id/install", async (req) => {
+    try {
+      return await market.install(req.params.id!)
+    } catch (e) {
+      throw new HttpError(400, (e as Error).message)
+    }
+  })
   router.get("/api/events", (_req, res) => {
     bus.subscribe(res)
   })

@@ -251,6 +251,29 @@ export interface McpServerStatus {
   tools: Array<{ name: string; description?: string; toolName: string }>
 }
 
+/** GET /api/marketplace: danh mục từ catalog.json kèm trạng thái đã cài. */
+export interface MarketItem {
+  id: string
+  kind: "mcp"
+  title: string
+  description: string
+  tags: string[]
+  publisher?: string
+  homepage?: string
+  config: McpServerConfig
+  installed: boolean
+  state: McpServerStatus["state"] | null
+}
+
+export interface MarketplaceView {
+  source: "remote" | "bundled" | "off"
+  url: string | null
+  updatedAt: string | null
+  fetchedAt: string | null
+  error: string | null
+  items: MarketItem[]
+}
+
 export interface Brief {
   goal: string
   context: string

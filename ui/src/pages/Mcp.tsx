@@ -33,7 +33,7 @@ export function Mcp() {
     <div className="page">
       <header>
         <h1>MCP</h1>
-        <p>Nối công cụ bên ngoài (Google Drive, Notion, email…) qua Model Context Protocol. Tool của server được đặt tên <code>&lt;server&gt;_&lt;tool&gt;</code> và mọi vai đều thấy.</p>
+        <p>Nối công cụ bên ngoài (Google Drive, Notion, email…) qua Model Context Protocol. Tool của server được đặt tên <code>&lt;server&gt;_&lt;tool&gt;</code> và mọi vai đều thấy. Công cụ có sẵn nằm ở <a href="#market">Chợ ứng dụng</a>.</p>
       </header>
       {error && <div className="notice err" style={{ marginBottom: 16 }}>{error}</div>}
       <div className="stack" style={{ maxWidth: 820 }}>

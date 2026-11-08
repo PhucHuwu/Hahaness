@@ -5,6 +5,7 @@ import { Knowledge } from "./pages/Knowledge.tsx"
 import { Results } from "./pages/Results.tsx"
 import { Skills } from "./pages/Skills.tsx"
 import { Mcp } from "./pages/Mcp.tsx"
+import { Market } from "./pages/Market.tsx"
 import { Schedules } from "./pages/Schedules.tsx"
 import { useConnectionState } from "./events.ts"
 import { api, onUnauthorized, type UpdateState } from "./api.ts"
@@ -17,6 +18,7 @@ const PAGES = [
   ["skills", "Kỹ năng"],
   ["schedules", "Lịch"],
   ["mcp", "MCP"],
+  ["market", "Chợ ứng dụng"],
   ["settings", "Cài đặt"],
 ] as const
 type Page = (typeof PAGES)[number][0]
@@ -95,6 +97,7 @@ function Shell() {
         {page === "skills" && <Skills />}
         {page === "schedules" && <Schedules id={arg || undefined} />}
         {page === "mcp" && <Mcp />}
+        {page === "market" && <Market />}
         {page === "settings" && <Settings />}
       </main>
     </div>
