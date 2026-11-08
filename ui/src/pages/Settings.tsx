@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { AccountCard } from "./Login.tsx"
-import { api, type Config, type ConfigView, type ProviderConfig, type TelegramStatus, type UpdateState } from "../api.ts"
+import { api, type Config, type ConfigView, type LicenseView, type ProviderConfig, type TelegramStatus, type UpdateState } from "../api.ts"
 
 export function Settings() {
   const [view, setView] = useState<ConfigView>()
@@ -140,6 +140,7 @@ export function Settings() {
           <p className="small muted">Phiên chat đang mở vẫn dùng model cũ; phiên mới sẽ dùng cấu hình này.</p>
           <TelegramCard />
           <AccountCard />
+          <LicenseCard />
           <UpdateCard />
         </div>
       )}
@@ -221,6 +222,88 @@ function ProviderCard({ id, p, onChange, onRename, onRemove }: { id: string; p: 
           Đường dẫn module (export default (options, {"{id, cwd}"}) =&gt; ProviderClient)
           <input type="text" className="mono" value={p.module} onChange={(e) => onChange({ ...p, module: e.target.value })} />
         </label>
+      )}
+    </div>
+  )
+}
+
+/** Giấy phép gắn với mã cài đặt: CEO gửi mã cho nhà cung cấp, nhận key, dán vào đây. Hết hạn chỉ khoá mục trả phí trong chợ. */
+function LicenseCard() {
+  const [st, setSt] = useState<LicenseView>()
+  const [key, setKey] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const [copied, setCopied] = useState(false)
+  const run = async (fn: () => Promise<LicenseView>) => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      setSt(await fn())
+      setKey("")
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  useEffect(() => void run(() => api.get<LicenseView>("/api/license")), [])
+  const copy = async () => {
+    if (!st) return
+    await navigator.clipboard.writeText(st.instance)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+  const badge =
+    st?.state === "valid" ? (
+      <span className="badge ok">còn hạn</span>
+    ) : st?.state === "expired" ? (
+      <span className="badge err">hết hạn</span>
+    ) : st?.state === "invalid" ? (
+      <span className="badge err">không hợp lệ</span>
+    ) : null
+
+  return (
+    <div className="card stack">
+      <div className="row between">
+        <h2>Giấy phép</h2>
+        {badge}
+      </div>
+      <p className="small muted">Giấy phép mở các công cụ trả phí trong Chợ ứng dụng. Không có hay hết hạn thì hệ thống và công cụ đã cài vẫn dùng bình thường.</p>
+      {error && <div className="notice err small">{error}</div>}
+      {st && (
+        <>
+          <div className="row wrap">
+            <span className="small">Mã cài đặt (gửi cho nhà cung cấp để nhận giấy phép):</span>
+            <code>{st.instance}</code>
+            <button className="btn small" onClick={copy}>
+              {copied ? "Đã chép" : "Chép"}
+            </button>
+          </div>
+          {st.state !== "none" && (
+            <div className="small">
+              Gói <b>{st.plan}</b>
+              {st.customer && <> cấp cho <b>{st.customer}</b></>}
+              {st.expiresAt && (
+                <>
+                  , {st.state === "expired" ? "đã hết hạn" : "hết hạn"} ngày {new Date(st.expiresAt).toLocaleDateString("vi-VN")}
+                  {st.state === "valid" && st.daysLeft !== null && <> (còn {st.daysLeft} ngày)</>}
+                </>
+              )}
+              .{st.error && <> {st.error}</>}
+            </div>
+          )}
+          <div className="row">
+            <input type="text" className="mono grow" value={key} placeholder={st.state === "none" ? "HH1.…" : "Dán giấy phép mới để thay"} autoComplete="off" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
+            <button className="btn primary" disabled={busy || !key.trim()} onClick={() => run(() => api.put<LicenseView>("/api/license", { key }))}>
+              {busy ? "Đang kiểm tra…" : "Kích hoạt"}
+            </button>
+            {st.state !== "none" && (
+              <button className="btn danger" disabled={busy} onClick={() => confirm("Gỡ giấy phép?") && run(() => api.delete<LicenseView>("/api/license"))}>
+                Gỡ
+              </button>
+            )}
+          </div>
+        </>
       )}
     </div>
   )

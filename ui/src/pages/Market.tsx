@@ -77,6 +77,7 @@ export function Market() {
                 <div className="row wrap">
                   <strong>{it.title}</strong>
                   {it.installed && <span className={`badge ${it.state === "connected" ? "ok" : it.state === "error" ? "err" : ""}`}>{it.state === "connected" ? "đã cài" : it.state === "error" ? "cài rồi, lỗi kết nối" : it.state === "disabled" ? "đã cài, đang tắt" : "đang kết nối"}</span>}
+                  {it.requiresLicense && <span className={`badge ${view.licensed ? "ok" : "warn"}`}>{view.licensed ? "trong gói" : "cần giấy phép"}</span>}
                   {it.tags.map((t) => (
                     <span key={t} className="badge">
                       {t}
@@ -86,6 +87,10 @@ export function Market() {
                 {it.installed ? (
                   <a href="#mcp" className="btn small">
                     Xem ở MCP
+                  </a>
+                ) : it.requiresLicense && !view.licensed ? (
+                  <a href="#settings" className="btn small" title="Nhập giấy phép ở Cài đặt">
+                    Nhập giấy phép
                   </a>
                 ) : (
                   <button className="btn small primary" disabled={busy === it.id} onClick={() => install(it)}>

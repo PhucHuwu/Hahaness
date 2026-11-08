@@ -251,6 +251,17 @@ export interface McpServerStatus {
   tools: Array<{ name: string; description?: string; toolName: string }>
 }
 
+/** GET/PUT/DELETE /api/license: giấy phép gắn với mã cài đặt. */
+export interface LicenseView {
+  instance: string
+  state: "none" | "valid" | "expired" | "invalid"
+  plan: string | null
+  customer: string | null
+  expiresAt: string | null
+  daysLeft: number | null
+  error: string | null
+}
+
 /** GET /api/marketplace: danh mục từ catalog.json kèm trạng thái đã cài. */
 export interface MarketItem {
   id: string
@@ -260,6 +271,7 @@ export interface MarketItem {
   tags: string[]
   publisher?: string
   homepage?: string
+  requiresLicense: boolean
   config: McpServerConfig
   installed: boolean
   state: McpServerStatus["state"] | null
@@ -271,6 +283,7 @@ export interface MarketplaceView {
   updatedAt: string | null
   fetchedAt: string | null
   error: string | null
+  licensed: boolean
   items: MarketItem[]
 }
 

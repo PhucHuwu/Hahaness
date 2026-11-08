@@ -52,7 +52,8 @@ connected to. The **Chợ ứng dụng** page lists those tools and installs the
 }
 ```
 
-Titles and descriptions are in Vietnamese because the CEO reads them.
+Titles and descriptions are in Vietnamese because the CEO reads them. An item may carry `"requiresLicense": true`
+(default `false`); see `21-license.md`.
 
 ## Routes
 
@@ -69,5 +70,7 @@ no network is needed.
 
 - Signed catalog (detached signature checked against a key baked into the image).
 - `skill` and `agent` item kinds (markdown written into the skill store / staff table).
-- License gating (step 4): an expired license hides the install button, never the installed tools.
 - Vendor-hosted MCP gateway with per-customer keys (step 5).
+
+Licence gating is done (`21-license.md`): items with `requiresLicense: true` install only while the instance holds a
+valid key; the view carries `licensed` so the UI can show `cần giấy phép` and link to Settings.

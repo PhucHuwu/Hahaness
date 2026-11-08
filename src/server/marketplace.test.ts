@@ -71,7 +71,28 @@ test("Marketplace: remote wins, falls back to bundled on error, install goes thr
     v = await off.view()
     assert.equal(v.source, "off")
     assert.equal(v.error, null)
+    assert.equal(v.licensed, false)
     assert.deepEqual(v.items.map((i) => i.id), ["bundled-one"])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("Marketplace: requiresLicense items install only while licensed", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hahaness-market-"))
+  const bundled = join(dir, "catalog.json")
+  await writeFile(bundled, JSON.stringify({ version: 1, items: [item("free"), { ...item("paid"), requiresLicense: true }] }))
+  try {
+    let licensed = false
+    const mcp = fakeMcp()
+    const m = new Marketplace({ mcp, bundledPath: bundled, url: "off", licensed: () => licensed })
+    assert.equal((await m.view()).items.find((i) => i.id === "paid")?.requiresLicense, true)
+    await m.install("free")
+    await assert.rejects(m.install("paid"), /giấy phép/)
+    licensed = true
+    assert.equal((await m.view()).licensed, true)
+    await m.install("paid")
+    assert.ok(mcp.added.has("paid"))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

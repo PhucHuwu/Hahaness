@@ -8,12 +8,14 @@ import { startServer } from "./index.ts"
 import type { App } from "../bootstrap.ts"
 import { Db } from "../core/db.ts"
 import { saveConfig } from "../config.ts"
+import { keygen, privateKeyFrom, signLicense } from "./license.ts"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
 let dir: string
 let base: string
 let app: App
 let close: () => Promise<void>
+const vendor = keygen()
 
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), "hahaness-server-"))
@@ -26,9 +28,12 @@ before(async () => {
   await writeFile(catalog, JSON.stringify({
     version: 1,
     updatedAt: "2026-01-01",
-    items: [{ id: "echo-market", kind: "mcp", title: "Echo", description: "test", config: { type: "stdio", command: "npx", args: ["tsx", join(root, "examples", "mcp", "echo-server.ts")] } }],
+    items: [
+      { id: "echo-market", kind: "mcp", title: "Echo", description: "test", config: { type: "stdio", command: "npx", args: ["tsx", join(root, "examples", "mcp", "echo-server.ts")] } },
+      { id: "echo-paid", kind: "mcp", title: "Echo (trả phí)", requiresLicense: true, config: { type: "stdio", command: "npx", args: ["tsx", join(root, "examples", "mcp", "echo-server.ts")] } },
+    ],
   }))
-  const s = await startServer({ cwd: dir, dbPath, port: 0, uiDir: join(dir, "no-ui"), auth: false, updates: false, catalogUrl: pathToFileURL(catalog).href })
+  const s = await startServer({ cwd: dir, dbPath, port: 0, uiDir: join(dir, "no-ui"), auth: false, updates: false, catalogUrl: pathToFileURL(catalog).href, licensePublicKey: vendor.publicKey })
   base = `http://127.0.0.1:${(s.server.address() as { port: number }).port}`
   app = s.app
   close = s.close
@@ -223,7 +228,7 @@ test("marketplace: catalog lists items with installed state, install writes an M
   type View = { source: string; error: string | null; items: Array<{ id: string; installed: boolean; state: string | null }> }
   const v = await get<View>("/api/marketplace")
   assert.equal(v.source, "remote", v.error ?? "")
-  assert.deepEqual(v.items.map((i) => [i.id, i.installed, i.state]), [["echo-market", false, null]])
+  assert.deepEqual(v.items.map((i) => [i.id, i.installed, i.state]), [["echo-market", false, null], ["echo-paid", false, null]])
 
   const { status, data } = await send<{ state: string; tools: Array<{ toolName: string }>; error?: string }>("POST", "/api/marketplace/echo-market/install")
   assert.equal(status, 200, JSON.stringify(data))
@@ -237,6 +242,46 @@ test("marketplace: catalog lists items with installed state, install writes an M
 
   await fetch(base + "/api/mcp/echo-market", { method: "DELETE" })
   assert.equal((await get<View>("/api/marketplace")).items[0]?.installed, false)
+})
+
+test("license: paid catalog items need a valid key tied to this instance; expiry blocks install, not installed tools", async () => {
+  type Lic = { instance: string; state: string; plan: string | null; daysLeft: number | null }
+  const { instance } = await get<{ instance: string }>("/api/health")
+  const l0 = await get<Lic>("/api/license")
+  assert.equal(l0.state, "none")
+  assert.equal(l0.instance, instance)
+  assert.equal((await get<{ licensed: boolean }>("/api/marketplace")).licensed, false)
+
+  const blocked = await send<{ error: string }>("POST", "/api/marketplace/echo-paid/install")
+  assert.equal(blocked.status, 400)
+  assert.match(blocked.data.error, /giấy phép/)
+
+  const priv = privateKeyFrom(vendor.privateKeyPem)
+  const future = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10)
+  const foreign = await send<{ error: string }>("PUT", "/api/license", { key: signLicense({ instance: "someone-else", plan: "pro", issuedAt: "2026-01-01", expiresAt: future }, priv) })
+  assert.equal(foreign.status, 400)
+  assert.match(foreign.data.error, /mã cài đặt khác/)
+
+  const ok = await send<Lic>("PUT", "/api/license", { key: signLicense({ instance, plan: "pro", customer: "Test Co", issuedAt: "2026-01-01", expiresAt: future }, priv) })
+  assert.equal(ok.status, 200, JSON.stringify(ok.data))
+  assert.equal(ok.data.state, "valid")
+  assert.equal(ok.data.plan, "pro")
+  assert.equal((await get<{ licensed: boolean }>("/api/marketplace")).licensed, true)
+
+  const inst = await send<{ state: string; error?: string }>("POST", "/api/marketplace/echo-paid/install")
+  assert.equal(inst.status, 200)
+  assert.equal(inst.data.state, "connected", inst.data.error)
+
+  // Key hết hạn: nhập được (để UI báo), nhưng chợ khoá; server MCP đã cài vẫn còn.
+  const expired = await send<Lic>("PUT", "/api/license", { key: signLicense({ instance, plan: "pro", issuedAt: "2025-01-01", expiresAt: "2025-02-01" }, priv) })
+  assert.equal(expired.data.state, "expired")
+  assert.ok(expired.data.daysLeft! < 0)
+  assert.equal((await get<{ licensed: boolean }>("/api/marketplace")).licensed, false)
+  assert.equal(app.mcp.get("echo-paid")?.state, "connected")
+
+  const rm = await fetch(base + "/api/license", { method: "DELETE" })
+  assert.equal(((await rm.json()) as Lic).state, "none")
+  await fetch(base + "/api/mcp/echo-paid", { method: "DELETE" })
 })
 
 test("results: deliverables and drafts are listed, viewed, downloaded and deleted", async () => {

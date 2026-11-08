@@ -83,6 +83,12 @@ The server listens on `127.0.0.1` by default. Set `HOST=0.0.0.0` to expose it, p
 
 Back up or move a company by copying its database file.
 
+### Licence (vendor side)
+
+Paid marketplace items need a licence key tied to the instance ID shown in Settings. The vendor signs keys with
+`npx tsx scripts/license.ts sign --instance <uuid> --plan pro --expires 2027-01-01 --key vendor.pem`; the private key is
+never in this repository or in the image (see [21-license](docs/architecture/21-license.md)).
+
 ## Development
 
 ```sh
@@ -120,3 +126,4 @@ The design borrows from [hermes-agent](docs/research/01-hermes-agent.md), [openc
 | [18-deployment](docs/architecture/18-deployment.md) | Docker image and compose file, data volume, reverse proxy, backup and upgrades |
 | [19-updates](docs/architecture/19-updates.md) | Instance ID, version reporting, daily "new version" check and notice |
 | [20-marketplace](docs/architecture/20-marketplace.md) | "Chợ ứng dụng": static `catalog.json`, one-click install of hosted MCP servers |
+| [21-license](docs/architecture/21-license.md) | Ed25519-signed licence key tied to the instance ID; unlocks paid marketplace items, verified offline |

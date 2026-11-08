@@ -24,6 +24,8 @@ const ItemSchema = z.object({
   tags: z.array(z.string()).default([]),
   publisher: z.string().optional(),
   homepage: z.string().url().optional(),
+  /** Mục trả phí: chỉ cài được khi giấy phép còn hạn. Mục đã cài không bị ảnh hưởng. */
+  requiresLicense: z.boolean().default(false),
   config: z.discriminatedUnion("type", [
     z.object({ type: z.literal("http"), url: z.string().url(), headers: z.record(z.string(), z.string()).optional() }),
     z.object({ type: z.literal("stdio"), command: z.string(), args: z.array(z.string()).optional(), env: z.record(z.string(), z.string()).optional() }),
@@ -44,6 +46,8 @@ export interface MarketplaceView {
   updatedAt: string | null
   fetchedAt: string | null
   error: string | null
+  /** Giấy phép còn hạn → mục `requiresLicense` cài được. */
+  licensed: boolean
   items: Array<CatalogItem & { installed: boolean; state: "disabled" | "connecting" | "connected" | "error" | null }>
 }
 
@@ -53,6 +57,8 @@ export interface MarketplaceOptions {
   bundledPath: string
   /** Mặc định DEFAULT_CATALOG_URL; `off` chỉ dùng bản đóng gói. */
   url?: string
+  /** Giấy phép còn hạn không. Mặc định: không. */
+  licensed?: () => boolean
   fetch?: typeof fetch
 }
 
@@ -82,6 +88,7 @@ export class Marketplace {
       updatedAt: this.catalog?.updatedAt ?? null,
       fetchedAt: this.fetchedAt ? new Date(this.fetchedAt).toISOString() : null,
       error: this.error,
+      licensed: this.licensed(),
       items,
     }
   }
@@ -90,7 +97,12 @@ export class Marketplace {
     await this.load(false)
     const it = this.catalog?.items.find((i) => i.id === id)
     if (!it) throw new Error(`Chợ ứng dụng không có mục "${id}".`)
+    if (it.requiresLicense && !this.licensed()) throw new Error("Mục này cần giấy phép còn hạn. Nhập mã giấy phép ở Cài đặt.")
     return this.opts.mcp.add(it.id, it.config as McpServerConfig)
+  }
+
+  private licensed() {
+    return this.opts.licensed?.() ?? false
   }
 
   private async load(refresh: boolean) {
